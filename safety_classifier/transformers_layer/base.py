@@ -35,6 +35,8 @@ def resolve_device(requested: str) -> str:
 class BaseHFClassifier:
     """Shared loading + inference logic for HF sequence-classification models."""
 
+    score_activation = "softmax"
+
     #: Default canonical-score template (all zero).
     def _zero_scores(self) -> dict[str, float]:
         return {lab: 0.0 for lab in C.SCORED_LABELS}
@@ -125,12 +127,19 @@ class BaseHFClassifier:
 
         logits = self._logits(texts)
         num_labels = logits.shape[-1]
-        # Multi-label heads (single logit or sigmoid-style) vs softmax classifiers:
-        # use softmax when >1 class and labels look mutually exclusive; otherwise
-        # sigmoid. We default to softmax for >=2 labels (typical for these models).
-        if num_labels == 1:
+        # Softmax is right for mutually exclusive binary/specialist classifiers.
+        # Broad moderation heads expose independent categories, so subclasses can
+        # request sigmoid scoring.
+        if num_labels == 1 or self.score_activation == "sigmoid":
             probs = torch.sigmoid(logits).squeeze(-1)
-            return [{self.id2label.get(0, "positive"): float(p)} for p in probs]
+            if num_labels == 1:
+                return [{self.id2label.get(0, "positive"): float(p)} for p in probs]
+            results: list[dict[str, float]] = []
+            for row in probs:
+                results.append(
+                    {self.id2label.get(i, str(i)): float(row[i]) for i in range(num_labels)}
+                )
+            return results
         probs = torch.softmax(logits.float(), dim=-1)
         results: list[dict[str, float]] = []
         for row in probs:

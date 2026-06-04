@@ -49,6 +49,8 @@ def _normalize_label(label: str) -> str:
 
 
 class ModerationClassifier(BaseHFClassifier):
+    score_activation = "sigmoid"
+
     def map_scores(self, raw: dict[str, float]) -> dict[str, float]:
         out: dict[str, float] = {}
         for label, prob in raw.items():
