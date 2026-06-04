@@ -167,34 +167,22 @@ def adapt_toxigen(rows: Iterable[dict], source: str) -> Iterator[UnifiedRecord]:
 # Broad moderation adapters
 # --------------------------------------------------------------------------- #
 def adapt_moderation_410k(rows: Iterable[dict], source: str) -> Iterator[UnifiedRecord]:
-    """ifmain/text-moderation-410K: OpenAI-style category flags.
+    """ifmain/text-moderation-410K.
 
-    Rows contain a ``text`` field and a ``moderation`` dict of category->bool, or
-    flat boolean columns. We extract any truthy categories as external labels.
+    Real schema: each row has ``text`` and ``moder`` =
+    ``{"categories": {cat: bool}, "category_scores": {cat: float}}``. We emit every
+    category flagged ``True``; rows with nothing flagged are labelled safe. The
+    older ``moderation`` key is also accepted for robustness. Raw category names
+    (e.g. ``harassment``, ``self_harm_instructions``, ``hate/threatening``) are
+    mapped to canonical labels downstream by the label mapper.
     """
-    category_keys = (
-        "harassment",
-        "harassment/threatening",
-        "hate",
-        "hate/threatening",
-        "self-harm",
-        "self-harm/intent",
-        "self-harm/instructions",
-        "sexual",
-        "sexual/minors",
-        "violence",
-        "violence/graphic",
-    )
     for row in rows:
         text = _first_text(row)
         if not text:
             continue
-        mod = row.get("moderation") or row
-        if isinstance(mod, dict):
-            cats = mod.get("categories", mod)
-        else:
-            cats = row
-        labels = [k for k in category_keys if isinstance(cats, dict) and cats.get(k)]
+        mod = row.get("moder") or row.get("moderation") or {}
+        cats = mod.get("categories", {}) if isinstance(mod, dict) else {}
+        labels = [k for k, v in cats.items() if v is True]
         if not labels:
             labels = [C.SAFE]
         yield _rec(text, labels, source)
