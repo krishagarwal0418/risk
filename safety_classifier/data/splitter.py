@@ -166,6 +166,13 @@ def _label_cap_for(split: str) -> int:
     return n if split == "train" else max(n // 8, 1)
 
 
+def _labels_under_cap(labels: list[str], label_written: Counter, cap: int) -> list[str]:
+    """Filter projected labels to those still below the per-label cap."""
+    if cap <= 0:
+        return labels
+    return [lab for lab in labels if label_written[lab] < cap]
+
+
 def build_fasttext_files() -> dict[str, Any]:
     """Generate per-head FastText train/val/test files from processed splits."""
     FASTTEXT_DIR.mkdir(parents=True, exist_ok=True)
@@ -197,15 +204,14 @@ def build_fasttext_files() -> dict[str, Any]:
                     projected = _head_labels_for(rec["labels"], head_labels)
                     if not projected:
                         continue
-                    # Skip if every label in this example has hit its cap.
-                    if cap and all(label_written[lab] >= cap for lab in projected):
+                    writable = _labels_under_cap(projected, label_written, cap)
+                    if not writable:
                         continue
-                    for line in _fasttext_line(projected, rec["text"]):
+                    for line in _fasttext_line(writable, rec["text"]):
                         fh.write(line + "\n")
-                    for lab in projected:
-                        if not cap or label_written[lab] < cap:
-                            counts[head][split][lab] += 1
-                            label_written[lab] += 1
+                    for lab in writable:
+                        counts[head][split][lab] += 1
+                        label_written[lab] += 1
 
     report = {head: {s: dict(c) for s, c in splits.items()} for head, splits in counts.items()}
     (REPORTS_DIR / "fasttext_data_report.json").write_text(

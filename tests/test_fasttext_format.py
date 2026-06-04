@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 from safety_classifier import constants as C
-from safety_classifier.data.splitter import _fasttext_line, _head_labels_for
+from collections import Counter
+
+from safety_classifier.data.splitter import (
+    _fasttext_line,
+    _head_labels_for,
+    _labels_under_cap,
+)
 
 
 def test_fasttext_line_single_label():
@@ -44,3 +50,11 @@ def test_head_projection_safe_used_in_all_heads():
 def test_head_projection_multilabel_within_head():
     out = _head_labels_for([C.HATE, C.TOXICITY], C.ABUSE_HEAD_LABELS)
     assert set(out) == {C.HATE, C.TOXICITY}
+
+
+def test_labels_under_cap_filters_only_capped_labels():
+    labels = [C.HATE, C.TOXICITY]
+    written = Counter({C.HATE: 2, C.TOXICITY: 1})
+
+    assert _labels_under_cap(labels, written, cap=2) == [C.TOXICITY]
+    assert _labels_under_cap(labels, written, cap=0) == labels
