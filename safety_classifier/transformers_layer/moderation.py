@@ -1,12 +1,9 @@
 """Broad moderation wrapper.
 
-Default:  oxyapi/albert-moderation-001 (OpenAI-style category labels)
-Optional: jdleo1/tinysafe-1 when it is loadable in the local Transformers stack.
-
-Both models expose OpenAI-style moderation category labels. A single raw category
-may map to *several* canonical labels (e.g. ``hate/threatening`` -> hate + violence).
-The mapping is keyed on the normalized raw label string and applied against the
-runtime ``id2label`` so unknown categories are preserved, not guessed.
+The primary config uses ifmain/ModerationBERT-En-02; the fallback config uses
+oxyapi/albert-moderation-001. Both expose OpenAI-style moderation categories once
+generic ``LABEL_0`` names are mapped for ModerationBERT. A single raw category may
+map to several canonical labels, e.g. ``hate/threatening`` -> hate + violence.
 """
 
 from __future__ import annotations

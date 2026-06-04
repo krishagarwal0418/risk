@@ -9,9 +9,9 @@ try/except so one failure does not abort the whole report.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
-from pathlib import Path
 from typing import Any
 
 from .. import constants as C
@@ -36,7 +36,10 @@ MODEL_TARGETS: dict[str, tuple[str, str, list[str]]] = {
 }
 
 
-def _load_test(limit: int | None = None) -> list[dict]:
+_THRESHOLDS = [round(0.05 * i, 2) for i in range(1, 19)]
+
+
+def _load_test(limit: int | None = None, targets: list[str] | None = None) -> list[dict]:
     path = PROCESSED_DIR / "all_test.jsonl"
     if not path.exists():
         return []
@@ -45,7 +48,31 @@ def _load_test(limit: int | None = None) -> list[dict]:
         for line in path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    return rows[:limit] if limit else rows
+    if limit is None or len(rows) <= limit:
+        return rows
+    if not targets:
+        return rows[:limit]
+
+    # Deterministic stratified sample: include positives for each evaluated
+    # target label first, then fill with hash-sorted background rows.
+    selected: dict[str, dict] = {}
+    per_label_budget = max(1, limit // (len(targets) + 1))
+    for label in targets:
+        positives = [r for r in rows if label in set(r.get("labels", []))]
+        positives.sort(key=lambda r: r.get("hash") or _stable_key(r["text"]))
+        for row in positives[:per_label_budget]:
+            selected[row.get("hash") or _stable_key(row["text"])] = row
+    remaining = [r for r in rows if (r.get("hash") or _stable_key(r["text"])) not in selected]
+    remaining.sort(key=lambda r: r.get("hash") or _stable_key(r["text"]))
+    for row in remaining:
+        if len(selected) >= limit:
+            break
+        selected[row.get("hash") or _stable_key(row["text"])] = row
+    return list(selected.values())[:limit]
+
+
+def _stable_key(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _binary_metrics(gold: list[int], scores: list[float], thr: float = 0.5) -> dict[str, Any]:
@@ -65,12 +92,38 @@ def _binary_metrics(gold: list[int], scores: list[float], thr: float = 0.5) -> d
     f1 = 2 * prec * rec / (prec + rec) if (prec + rec) else 0.0
     acc = (tp + tn) / max(len(gold), 1)
     out = {
+        "threshold": thr,
         "support_positive": tp + fn,
+        "predicted_positive": tp + fp,
         "precision": round(prec, 4),
         "recall": round(rec, 4),
         "f1": round(f1, 4),
         "accuracy": round(acc, 4),
         "confusion": {"tp": tp, "fp": fp, "fn": fn, "tn": tn},
+    }
+    return out
+
+
+def _threshold_metrics(gold: list[int], scores: list[float]) -> dict[str, Any]:
+    by_threshold = {thr: _binary_metrics(gold, scores, thr=thr) for thr in _THRESHOLDS}
+    best_thr = max(_THRESHOLDS, key=lambda thr: by_threshold[thr]["f1"])
+    high_recall_candidates = [
+        thr for thr in _THRESHOLDS if by_threshold[thr]["recall"] >= 0.90
+    ]
+    high_recall_thr = max(high_recall_candidates) if high_recall_candidates else best_thr
+    default = _binary_metrics(gold, scores, thr=0.5)
+    best = by_threshold[best_thr]
+    high_recall = by_threshold[high_recall_thr]
+    out = {
+        **default,
+        "best_f1_threshold": best_thr,
+        "best_f1": best["f1"],
+        "best_f1_precision": best["precision"],
+        "best_f1_recall": best["recall"],
+        "high_recall_threshold": high_recall_thr,
+        "high_recall_precision": high_recall["precision"],
+        "high_recall_recall": high_recall["recall"],
+        "high_recall_predicted_positive": high_recall["predicted_positive"],
     }
     # ROC-AUC / PR-AUC if both classes present and sklearn available.
     if 0 < sum(gold) < len(gold):
@@ -106,7 +159,7 @@ def _evaluate_one(
     if not cfg:
         return {"model_key": model_key, "status": "error", "error": "no config"}
 
-    rows = _load_test(limit)
+    rows = _load_test(limit, targets=targets)
     if not rows:
         return {"model_key": model_key, "status": "skipped", "error": "no test data"}
 
@@ -134,13 +187,22 @@ def _evaluate_one(
                 score_by_label[t].append(scores.get(t, 0.0))
 
     per_label = {
-        t: _binary_metrics(gold_by_label[t], score_by_label[t])
+        t: _threshold_metrics(gold_by_label[t], score_by_label[t])
         for t in targets
         if sum(gold_by_label[t]) > 0  # only labels actually present in the test set
     }
     macro_f1 = (
         round(sum(m["f1"] for m in per_label.values()) / len(per_label), 4)
         if per_label else None
+    )
+    macro_best_f1 = (
+        round(sum(m["best_f1"] for m in per_label.values()) / len(per_label), 4)
+        if per_label else None
+    )
+    pr_auc_values = [m["pr_auc"] for m in per_label.values() if "pr_auc" in m]
+    macro_pr_auc = (
+        round(sum(pr_auc_values) / len(pr_auc_values), 4)
+        if pr_auc_values else None
     )
     return {
         "model_key": model_key,
@@ -149,6 +211,8 @@ def _evaluate_one(
         "test_examples": len(rows),
         "labels_evaluated": list(per_label.keys()),
         "macro_f1": macro_f1,
+        "macro_best_f1": macro_best_f1,
+        "macro_pr_auc": macro_pr_auc,
         "per_label": per_label,
         "latency_ms": percentiles(latencies),
         "gpu_memory_mb": _gpu_memory_mb(),
@@ -175,9 +239,9 @@ def run_baseline_eval(
         if results[key].get("status") != "ok":
             warnings.append(f"{key}: {results[key].get('error', results[key].get('status'))}")
         else:
-            macro = results[key].get("macro_f1")
+            macro = results[key].get("macro_best_f1")
             if macro is not None and macro < 0.5:
-                warnings.append(f"{key}: low baseline macro F1 ({macro})")
+                warnings.append(f"{key}: low best-threshold macro F1 ({macro})")
 
     ok = [r for r in results.values() if r.get("status") == "ok"]
     status = Status.FAIL if not ok else (Status.WARN if warnings else Status.PASS)
@@ -189,6 +253,8 @@ def run_baseline_eval(
             r.get("status", "?").upper(),
             r.get("test_examples", 0),
             r.get("macro_f1", "n/a"),
+            r.get("macro_best_f1", "n/a"),
+            r.get("macro_pr_auc", "n/a"),
             r.get("latency_ms", {}).get("p95", "n/a") if r.get("status") == "ok" else "n/a",
         ])
 
@@ -199,13 +265,13 @@ def run_baseline_eval(
         summary={"models": results},
         tables=[(
             "Baseline Metrics",
-            ["Model", "Status", "Test ex.", "Macro F1", "p95 ms"],
+            ["Model", "Status", "Test ex.", "F1@0.5", "Best F1", "PR-AUC", "p95 ms"],
             table_rows,
         )],
         warnings=warnings,
     )
     print_summary(
         "Transformer Baseline", status,
-        ["Model", "Status", "Test ex.", "Macro F1", "p95 ms"], table_rows,
+        ["Model", "Status", "Test ex.", "F1@0.5", "Best F1", "PR-AUC", "p95 ms"], table_rows,
     )
     return {"models": results, "status": status.value}

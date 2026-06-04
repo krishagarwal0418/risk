@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 
 from safety_classifier import constants as C
-from safety_classifier.evaluation import data_eval, final_report
+from safety_classifier.evaluation import data_eval, final_report, transformer_eval
 from safety_classifier.routing import thresholds as thresholds_mod
 
 
@@ -87,3 +87,48 @@ def test_final_report_handles_missing_stages(tmp_path, monkeypatch):
     # Components not run should be marked NOT-RUN.
     comp = {row[0]: row[1] for row in summary["components"]}
     assert comp["FastText attack head"] == "NOT-RUN"
+
+
+def test_transformer_test_sample_includes_target_positives(tmp_path, monkeypatch):
+    processed = tmp_path / "processed"
+    processed.mkdir()
+    monkeypatch.setattr(transformer_eval, "PROCESSED_DIR", processed)
+
+    records = [
+        {"text": f"safe {i}", "labels": [C.SAFE], "hash": f"safe-{i}"}
+        for i in range(20)
+    ]
+    records += [
+        {
+            "text": "late prompt injection",
+            "labels": [C.PROMPT_INJECTION],
+            "hash": "pi",
+        },
+        {"text": "late jailbreak", "labels": [C.JAILBREAK], "hash": "jb"},
+    ]
+    _write_processed(processed, "test", records)
+
+    rows = transformer_eval._load_test(
+        limit=6, targets=[C.PROMPT_INJECTION, C.JAILBREAK]
+    )
+    sampled_labels = {lab for row in rows for lab in row["labels"]}
+
+    assert len(rows) == 6
+    assert C.PROMPT_INJECTION in sampled_labels
+    assert C.JAILBREAK in sampled_labels
+
+
+def test_transformer_threshold_metrics_report_calibrated_view():
+    metrics = transformer_eval._threshold_metrics(
+        gold=[1, 1, 0, 0],
+        scores=[0.4, 0.2, 0.1, 0.6],
+    )
+
+    assert metrics["threshold"] == 0.5
+    assert metrics["support_positive"] == 2
+    assert metrics["predicted_positive"] == 1
+    assert metrics["f1"] == 0.0
+    assert metrics["best_f1"] == 0.8
+    assert metrics["high_recall_threshold"] == 0.2
+    assert metrics["high_recall_recall"] == 1.0
+    assert metrics["high_recall_precision"] == 0.6667
