@@ -10,7 +10,7 @@ reload boundary):
     SC_DEVICE    cuda|cpu             (default cuda)
     SC_BACKEND   pytorch|onnx|onnx_int8 (default pytorch)
     SC_TOXIC_FALLBACK  0|1            (default 0)
-    SC_MODERATION  tinysafe|oxyapi    (default tinysafe)
+    SC_MODERATION  tinysafe|oxyapi    (default oxyapi)
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ def get_classifier() -> SafetyClassifier:
         device=os.environ.get("SC_DEVICE", "cuda"),
         backend=os.environ.get("SC_BACKEND", "pytorch"),
         enable_toxic_fallback=os.environ.get("SC_TOXIC_FALLBACK", "0") == "1",
-        moderation_backend=os.environ.get("SC_MODERATION", "tinysafe"),
+        moderation_backend=os.environ.get("SC_MODERATION", "oxyapi"),
     )
 
 

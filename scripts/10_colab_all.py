@@ -51,7 +51,11 @@ def _download_transformers() -> None:
     from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
     cfg = load_models_config().get("transformers", {})
-    for key, entry in cfg.items():
+    keys = ("prompt_injection", "jailbreak", "moderation_fallback", "toxic_fallback")
+    for key in keys:
+        entry = cfg.get(key)
+        if not entry:
+            continue
         try:
             out = resolve_path(entry["local_path"])
             out.mkdir(parents=True, exist_ok=True)

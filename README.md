@@ -34,9 +34,9 @@ text
          · high_risk_head  → safe / sexual / violence / self_harm /
                               dangerous_information / illegal_activity
          └─ Router decides which transformer confirmers to run
-             · protectai/deberta-v3-small-prompt-injection-v2  (prompt injection)
+             · protectai/deberta-v3-base-prompt-injection-v2   (prompt injection)
              · madhurjindal/Jailbreak-Detector                 (jailbreak)
-             · jdleo1/tinysafe-1 / oxyapi/albert-moderation-001 (broad moderation)
+             · oxyapi/albert-moderation-001                    (broad moderation)
              · Intel/toxic-prompt-roberta                       (optional toxic fallback)
              └─ Score merger (max per label) → decision + risk level
 ```
@@ -61,10 +61,10 @@ distributions and routes poorly.
 
 | Role | Model | License |
 |---|---|---|
-| Prompt injection | `protectai/deberta-v3-small-prompt-injection-v2` | Apache-2.0 |
+| Prompt injection | `protectai/deberta-v3-base-prompt-injection-v2` | Apache-2.0 |
 | Jailbreak | `madhurjindal/Jailbreak-Detector` | MIT |
-| Broad moderation (primary) | `jdleo1/tinysafe-1` (71M DeBERTa-v3-xsmall) | see model card |
-| Broad moderation (fallback) | `oxyapi/albert-moderation-001` | Apache-2.0 |
+| Broad moderation (default) | `oxyapi/albert-moderation-001` | Apache-2.0 |
+| Broad moderation (optional) | `jdleo1/tinysafe-1` | see model card |
 | Toxic fallback (optional) | `Intel/toxic-prompt-roberta` / `unitary/toxic-bert` | see model card |
 
 Label mappings are resolved dynamically against each model's `config.id2label`;
@@ -105,8 +105,8 @@ succeeded. Each script produces:
 4. a clear **PASS / WARN / FAIL** status.
 
 `PASS` = step succeeded · `WARN` = completed with issues (e.g. one dataset
-unavailable, a label underrepresented, TinySafe ONNX export failed but the oxyapi
-fallback works) · `FAIL` = cannot continue (no usable data, required model can't
+unavailable, a label underrepresented, an optional model export failed but the oxyapi
+moderation model works) · `FAIL` = cannot continue (no usable data, required model can't
 load, quantized model can't load). Serious failures are never hidden in logs.
 
 ### Reports produced
@@ -215,9 +215,9 @@ Runtime is configured via env vars (`SC_DEVICE`, `SC_BACKEND`,
 - Transformer ONNX models are exported with Optimum (`06_export_onnx.py`) and
   dynamically quantized to INT8 (`07_quantize_onnx.py`), with FP32-vs-INT8
   validation over 20 mild test strings (warns if max abs logit diff > 0.05).
-- TinySafe export may fail on a custom architecture; that is documented and
-  non-blocking — keep the PyTorch path for TinySafe and use the oxyapi fallback
-  for ONNX/INT8.
+- TinySafe is kept as an optional experimental moderation backend. The default
+  pipeline uses oxyapi because it loads and exports through the standard
+  Hugging Face/ONNX path.
 
 ## Benchmarks
 
@@ -236,7 +236,7 @@ adapt a model to their own validation data:
 
 ```bash
 python -m safety_classifier.transformers_layer.finetune \
-    --model protectai/deberta-v3-small-prompt-injection-v2 \
+    --model protectai/deberta-v3-base-prompt-injection-v2 \
     --task attack \
     --train data/processed/all_train.jsonl \
     --val data/processed/all_val.jsonl \

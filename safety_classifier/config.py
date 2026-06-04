@@ -72,7 +72,7 @@ class RuntimeConfig:
     use_int8: bool = False
     full_scan_default: bool = False
     enable_toxic_fallback: bool = False
-    moderation_backend: str = "tinysafe"
+    moderation_backend: str = "oxyapi"
     max_length: int = 128
     fp16_on_cuda: bool = True
     batch_size: int = 16
@@ -93,7 +93,7 @@ class RuntimeConfig:
             use_int8=runtime.get("use_int8", False),
             full_scan_default=runtime.get("full_scan_default", False),
             enable_toxic_fallback=runtime.get("enable_toxic_fallback", False),
-            moderation_backend=runtime.get("moderation_backend", "tinysafe"),
+            moderation_backend=runtime.get("moderation_backend", "oxyapi"),
             max_length=inference.get("max_length", 128),
             fp16_on_cuda=inference.get("fp16_on_cuda", True),
             batch_size=inference.get("batch_size", 16),

@@ -104,7 +104,6 @@ def quantize_model(key: str, entry: dict[str, Any]) -> dict[str, Any]:
 _QUANTIZE_KEYS = (
     "prompt_injection",
     "jailbreak",
-    "moderation_primary",
     "moderation_fallback",
 )
 

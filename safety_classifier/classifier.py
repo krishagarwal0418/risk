@@ -52,7 +52,7 @@ class SafetyClassifier:
         use_int8: bool = False,
         full_scan_default: bool = False,
         enable_toxic_fallback: bool = False,
-        moderation_backend: str = "tinysafe",
+        moderation_backend: str = "oxyapi",
         lazy: bool = False,
     ) -> None:
         cfg = RuntimeConfig.from_yaml()

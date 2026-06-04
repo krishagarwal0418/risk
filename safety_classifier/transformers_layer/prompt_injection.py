@@ -1,4 +1,4 @@
-"""Prompt-injection detector wrapper (protectai/deberta-v3-small-prompt-injection-v2).
+"""Prompt-injection detector wrapper.
 
 The model's id2label is typically {0: "SAFE", 1: "INJECTION"}. We map injection-ish
 labels to ``prompt_injection`` and benign-ish labels to safe (contributing nothing

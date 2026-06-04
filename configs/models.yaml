@@ -8,7 +8,7 @@ fasttext:
 
 transformers:
   prompt_injection:
-    hf_name: protectai/deberta-v3-small-prompt-injection-v2
+    hf_name: protectai/deberta-v3-base-prompt-injection-v2
     local_path: models/transformers/prompt_injection
     onnx_path: models/onnx/prompt_injection
     int8_path: models/onnx_int8/prompt_injection

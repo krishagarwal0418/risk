@@ -1,7 +1,7 @@
 """Broad moderation wrapper.
 
-Primary:  jdleo1/tinysafe-1  (71M DeBERTa-v3-xsmall safety classifier)
-Fallback: oxyapi/albert-moderation-001 (OpenAI-style category labels)
+Default:  oxyapi/albert-moderation-001 (OpenAI-style category labels)
+Optional: jdleo1/tinysafe-1 when it is loadable in the local Transformers stack.
 
 Both models expose OpenAI-style moderation category labels. A single raw category
 may map to *several* canonical labels (e.g. ``hate/threatening`` -> hate + violence).

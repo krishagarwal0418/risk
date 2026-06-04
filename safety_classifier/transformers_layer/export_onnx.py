@@ -60,12 +60,12 @@ def export_model(hf_name: str, out_dir: Path) -> dict[str, Any]:
         }
 
 
-# Models that should be exported. moderation_primary (TinySafe) is attempted but
-# may fail on a custom architecture — that is documented and non-blocking.
+# Models that should be exported by default. TinySafe is kept in the config as an
+# optional PyTorch-only experiment, but the standard pipeline uses oxyapi because
+# it loads through the normal Hugging Face/ONNX path.
 _EXPORT_KEYS = (
     "prompt_injection",
     "jailbreak",
-    "moderation_primary",
     "moderation_fallback",
 )
 
@@ -85,10 +85,4 @@ def export_all(include_toxic_fallback: bool = False) -> dict[str, Any]:
         results[key] = export_model(entry["hf_name"], out_dir)
         status = results[key]["status"]
         print(f"[onnx-export] {key}: {status}")
-        if status != "ok" and key == "moderation_primary":
-            print(
-                "[onnx-export] NOTE: TinySafe export failed (likely custom "
-                "architecture). Keep the PyTorch path for TinySafe and use the "
-                "oxyapi moderation fallback for ONNX/INT8."
-            )
     return results

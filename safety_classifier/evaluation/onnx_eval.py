@@ -27,7 +27,7 @@ from ..reporting import (
 )
 from ..transformers_layer.quantize_onnx import _VALIDATION_TEXTS
 
-_EXPORT_KEYS = ("prompt_injection", "jailbreak", "moderation_primary", "moderation_fallback")
+_EXPORT_KEYS = ("prompt_injection", "jailbreak", "moderation_fallback")
 
 
 # --------------------------------------------------------------------------- #
@@ -87,13 +87,7 @@ def write_export_report(export_results: dict[str, Any]) -> dict[str, Any]:
             **validation,
         }
         if not validation["sample_inference_ok"]:
-            if key == "moderation_primary":
-                warnings.append(
-                    "TinySafe ONNX export failed, using PyTorch backend for TinySafe. "
-                    "Oxyapi moderation remains available for ONNX path."
-                )
-            else:
-                warnings.append(f"{key}: ONNX export/validation failed")
+            warnings.append(f"{key}: ONNX export/validation failed")
 
     ok = sum(1 for m in models.values() if m["sample_inference_ok"])
     total = len(models)

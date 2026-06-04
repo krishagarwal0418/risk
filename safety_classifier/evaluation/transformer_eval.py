@@ -161,7 +161,7 @@ def run_baseline_eval(
     limit: int | None = 2000,
     batch_size: int = 64,
 ) -> dict[str, Any]:
-    keys = ["prompt_injection", "jailbreak", "moderation_primary", "moderation_fallback"]
+    keys = ["prompt_injection", "jailbreak", "moderation_fallback"]
     if include_toxic_fallback:
         keys.append("toxic_fallback")
 
