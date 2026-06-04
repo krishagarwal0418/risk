@@ -3,7 +3,7 @@
 Pipeline:
   1. Read every ``data/raw/*.jsonl`` record.
   2. Normalize text + map external labels to canonical labels.
-  3. Deduplicate by normalized text hash.
+  3. Merge duplicate normalized text hashes, preserving the union of labels.
   4. Stable hash-based split into train/val/test (80/10/10) so the *same*
      normalized text can never appear in two splits.
   5. Write processed JSONL + per-head FastText files + distribution reports.
@@ -50,14 +50,23 @@ def _split_for_hash(text_hash: str) -> str:
     return "test"
 
 
+def _merge_canonical_labels(existing: list[str], incoming: list[str]) -> list[str]:
+    """Merge canonical labels while keeping ``safe`` out of mixed-risk records."""
+    merged = list(existing)
+    for lab in incoming:
+        if lab not in merged:
+            merged.append(lab)
+    if any(lab in C.RISK_LABELS or lab == C.UNKNOWN for lab in merged):
+        merged = [lab for lab in merged if lab != C.SAFE]
+    return merged or [C.UNKNOWN]
+
+
 def build_processed_splits() -> dict[str, Any]:
-    """Normalize, map, dedup and split all raw records. Returns a report dict."""
+    """Normalize, map, merge duplicates and split all raw records."""
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
-    seen_hashes: set[str] = set()
-    splits: dict[str, list[dict]] = {"train": [], "val": [], "test": []}
-    class_counts: dict[str, Counter] = {k: Counter() for k in splits}
+    records_by_hash: dict[str, dict] = {}
     source_counts: Counter = Counter()
     skipped: Counter = Counter()
     total = 0
@@ -74,24 +83,37 @@ def build_processed_splits() -> dict[str, Any]:
             skipped["empty_after_normalize"] += 1
             continue
 
-        if norm.text_hash in seen_hashes:
-            skipped["duplicate"] += 1
-            continue
-        seen_hashes.add(norm.text_hash)
-
         canonical = map_labels(raw.get("labels", []), context=norm.detection_text)
-        record = {
+        source = raw.get("source", "unknown")
+        if norm.text_hash in records_by_hash:
+            skipped["duplicate"] += 1
+            existing = records_by_hash[norm.text_hash]
+            existing["labels"] = _merge_canonical_labels(existing["labels"], canonical)
+            for lab in raw.get("labels", []):
+                if lab not in existing["raw_labels"]:
+                    existing["raw_labels"].append(lab)
+            if source not in existing["sources"]:
+                existing["sources"].append(source)
+            continue
+
+        records_by_hash[norm.text_hash] = {
             "text": norm.model_text,
             "detection_text": norm.detection_text,
             "labels": canonical,
-            "source": raw.get("source", "unknown"),
+            "source": source,
+            "sources": [source],
             "hash": norm.text_hash,
-            "raw_labels": raw.get("labels", []),
+            "raw_labels": list(raw.get("labels", [])),
         }
-        split = _split_for_hash(norm.text_hash)
+
+    splits: dict[str, list[dict]] = {"train": [], "val": [], "test": []}
+    class_counts: dict[str, Counter] = {k: Counter() for k in splits}
+
+    for record in records_by_hash.values():
+        split = _split_for_hash(record["hash"])
         splits[split].append(record)
         source_counts[record["source"]] += 1
-        for lab in canonical:
+        for lab in record["labels"]:
             class_counts[split][lab] += 1
 
     for split, records in splits.items():
@@ -102,7 +124,7 @@ def build_processed_splits() -> dict[str, Any]:
 
     report = {
         "total_raw_records": total,
-        "unique_records": len(seen_hashes),
+        "unique_records": len(records_by_hash),
         "split_sizes": {k: len(v) for k, v in splits.items()},
         "class_distribution": {k: dict(v) for k, v in class_counts.items()},
         "source_distribution": dict(source_counts),

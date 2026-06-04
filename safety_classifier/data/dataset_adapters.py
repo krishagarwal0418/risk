@@ -12,6 +12,7 @@ labels when the dataset's intent is unambiguous (e.g. a pure jailbreak dataset).
 
 from __future__ import annotations
 
+import re
 from typing import Any, Callable, Iterable, Iterator
 
 from .. import constants as C
@@ -315,6 +316,137 @@ def adapt_do_not_answer(rows: Iterable[dict], source: str) -> Iterator[UnifiedRe
             yield _rec(text, [C.SAFE], source)
 
 
+_HARMFUL_PROMPT_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        C.SELF_HARM,
+        (
+            r"\bself[-\s]?harm\b",
+            r"\bsuicide\b",
+            r"\bkill myself\b",
+            r"\bharm myself\b",
+            r"\boverdose\b",
+            r"\beating disorder\b",
+        ),
+    ),
+    (
+        C.DANGEROUS_INFORMATION,
+        (
+            r"\bbomb\b",
+            r"\bexplosive",
+            r"\bweapon",
+            r"\bfirearm",
+            r"\bgun\b",
+            r"\bmalware\b",
+            r"\bvirus\b",
+            r"\bransomware\b",
+            r"\bphishing\b",
+            r"\bhack(?:ing|er|ed|s)?\b",
+            r"\bexploit\b",
+            r"\bcyberattack\b",
+            r"\bdrug",
+            r"\bcocaine\b",
+            r"\bfentanyl\b",
+            r"\bmeth\b",
+            r"\bpoison",
+            r"\btoxin",
+            r"\bchemical\b",
+            r"\bbiological\b",
+            r"\bnuclear\b",
+        ),
+    ),
+    (
+        C.ILLEGAL_ACTIVITY,
+        (
+            r"\billegal\b",
+            r"\bfraud\b",
+            r"\btheft\b",
+            r"\bidentity theft\b",
+            r"\bsteal",
+            r"\bshoplift",
+            r"\bscam\b",
+            r"\bcounterfeit",
+            r"\bmoney laundering\b",
+            r"\bcredit card\b",
+            r"\bfake id\b",
+            r"\bblackmail\b",
+            r"\bbribe\b",
+            r"\bstalk",
+        ),
+    ),
+    (
+        C.VIOLENCE,
+        (
+            r"\bkill\b",
+            r"\bmurder\b",
+            r"\bassault\b",
+            r"\btorture\b",
+            r"\bterrorist attack\b",
+            r"\bkidnap",
+            r"\bstrangle\b",
+            r"\bunconscious\b",
+        ),
+    ),
+    (
+        C.SEXUAL,
+        (
+            r"\bsexual\b",
+            r"\bporn",
+            r"\brape\b",
+            r"\badult content\b",
+            r"\bexplicit\b",
+            r"\bnudity\b",
+            r"\bprostitut",
+        ),
+    ),
+    (
+        C.HATE,
+        (
+            r"\bhate speech\b",
+            r"\bracist\b",
+            r"\bnazi\b",
+            r"\bgenocide\b",
+            r"\bslur\b",
+        ),
+    ),
+    (
+        C.HARASSMENT,
+        (
+            r"\bharass",
+            r"\bcyberbully",
+            r"\bcyberbullying\b",
+            r"\bbully",
+            r"\bstalk",
+            r"\bdefam",
+        ),
+    ),
+)
+
+
+def _harmful_prompt_labels(text: str) -> list[str]:
+    """Weak labels for harmful prompt datasets that lack category columns."""
+    low = text.lower()
+    labels: list[str] = []
+    for label, patterns in _HARMFUL_PROMPT_PATTERNS:
+        if any(re.search(pattern, low) for pattern in patterns):
+            labels.append(label)
+    return labels or [C.UNKNOWN]
+
+
+def adapt_harmful_prompts(rows: Iterable[dict], source: str) -> Iterator[UnifiedRecord]:
+    """Harmful prompt-only datasets with no category column.
+
+    Example: ``LLM-LAT/harmful-dataset`` has ``prompt``, ``rejected`` and
+    ``chosen`` but no fine-grained harm label. These are harmful prompts by
+    construction, so emit conservative keyword-derived weak labels instead of
+    sending every row to ``unknown``.
+    """
+    for row in rows:
+        text = _first_text(row)
+        if not text:
+            continue
+        yield _rec(text, _harmful_prompt_labels(text), source)
+
+
 def adapt_sorry_bench(rows: Iterable[dict], source: str) -> Iterator[UnifiedRecord]:
     """sorry-bench/sorry-bench-202406.
 
@@ -364,6 +496,9 @@ def adapt_sorry_bench(rows: Iterable[dict], source: str) -> Iterator[UnifiedReco
             row.get("category_original") or row.get("category_name") or ""
         ).strip().lower()
         label = next((v for k, v in _name_map.items() if k in cat_name), None)
+        if label is None and not cat_name and row.get("category") is None:
+            yield _rec(text, _harmful_prompt_labels(text), source)
+            continue
         if label is None:
             # Fall back to numeric range.
             try:
@@ -408,6 +543,7 @@ ADAPTERS: dict[str, Adapter] = {
     "salad": adapt_salad,
     "aegis": adapt_aegis,
     "do_not_answer": adapt_do_not_answer,
+    "harmful_prompts": adapt_harmful_prompts,
     "sorry_bench": adapt_sorry_bench,
     "xstest": adapt_xstest,
     "jigsaw": adapt_jigsaw,
