@@ -51,7 +51,13 @@ def _download_transformers() -> None:
     from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
     cfg = load_models_config().get("transformers", {})
-    keys = ("prompt_injection", "jailbreak", "moderation_fallback", "toxic_fallback")
+    keys = (
+        "prompt_injection",
+        "jailbreak",
+        "moderation_primary",
+        "moderation_fallback",
+        "toxic_fallback",
+    )
     for key in keys:
         entry = cfg.get(key)
         if not entry:

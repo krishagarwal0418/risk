@@ -10,7 +10,7 @@ want to adapt a model to their own validation data.
 
 Usage:
     python -m safety_classifier.transformers_layer.finetune \
-        --model protectai/deberta-v3-small-prompt-injection-v2 \
+        --model devndeploy/bert-prompt-injection-detector \
         --task attack \
         --train data/processed/all_train.jsonl \
         --val data/processed/all_val.jsonl \

@@ -8,7 +8,7 @@ fasttext:
 
 transformers:
   prompt_injection:
-    hf_name: protectai/deberta-v3-base-prompt-injection-v2
+    hf_name: devndeploy/bert-prompt-injection-detector
     local_path: models/transformers/prompt_injection
     onnx_path: models/onnx/prompt_injection
     int8_path: models/onnx_int8/prompt_injection
@@ -20,10 +20,10 @@ transformers:
     int8_path: models/onnx_int8/jailbreak
 
   moderation_primary:
-    hf_name: jdleo1/tinysafe-1
-    local_path: models/transformers/tinysafe
-    onnx_path: models/onnx/tinysafe
-    int8_path: models/onnx_int8/tinysafe
+    hf_name: ifmain/ModerationBERT-En-02
+    local_path: models/transformers/moderation_bert
+    onnx_path: models/onnx/moderation_bert
+    int8_path: models/onnx_int8/moderation_bert
 
   moderation_fallback:
     hf_name: oxyapi/albert-moderation-001

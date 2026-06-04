@@ -25,7 +25,9 @@ _CATEGORY_MAP: dict[str, list[str]] = {
     "self-harm": [C.SELF_HARM],
     "self_harm": [C.SELF_HARM],
     "self-harm/intent": [C.SELF_HARM],
+    "self_harm_intent": [C.SELF_HARM],
     "self-harm/instructions": [C.SELF_HARM],
+    "self_harm_instructions": [C.SELF_HARM],
     "sexual": [C.SEXUAL],
     "sexual/minors": [C.SEXUAL],
     "sexual_minors": [C.SEXUAL],
@@ -43,6 +45,27 @@ _CATEGORY_MAP: dict[str, list[str]] = {
 
 _SAFE_TOKENS = ("safe", "benign", "ok", "none", "clean", "neutral")
 
+_MODERATION_BERT_LABELS = (
+    "harassment",
+    "harassment_threatening",
+    "hate",
+    "hate_threatening",
+    "self_harm",
+    "self_harm_instructions",
+    "self_harm_intent",
+    "sexual",
+    "sexual_minors",
+    "violence",
+    "violence_graphic",
+    "self-harm",
+    "sexual/minors",
+    "hate/threatening",
+    "violence/graphic",
+    "self-harm/intent",
+    "self-harm/instructions",
+    "harassment/threatening",
+)
+
 
 def _normalize_label(label: str) -> str:
     return label.strip().lower().replace(" ", "_")
@@ -50,6 +73,13 @@ def _normalize_label(label: str) -> str:
 
 class ModerationClassifier(BaseHFClassifier):
     score_activation = "sigmoid"
+
+    def _load(self) -> None:
+        super()._load()
+        labels = tuple(self.id2label.get(i, "") for i in range(len(_MODERATION_BERT_LABELS)))
+        generic = tuple(f"LABEL_{i}" for i in range(len(_MODERATION_BERT_LABELS)))
+        if labels == generic:
+            self.id2label = {i: label for i, label in enumerate(_MODERATION_BERT_LABELS)}
 
     def map_scores(self, raw: dict[str, float]) -> dict[str, float]:
         out: dict[str, float] = {}

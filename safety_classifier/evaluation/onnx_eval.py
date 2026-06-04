@@ -27,7 +27,7 @@ from ..reporting import (
 )
 from ..transformers_layer.quantize_onnx import _VALIDATION_TEXTS
 
-_EXPORT_KEYS = ("prompt_injection", "jailbreak", "moderation_fallback")
+_EXPORT_KEYS = ("prompt_injection", "jailbreak", "moderation_primary", "moderation_fallback")
 
 
 # --------------------------------------------------------------------------- #

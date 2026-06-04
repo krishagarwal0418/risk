@@ -60,12 +60,11 @@ def export_model(hf_name: str, out_dir: Path) -> dict[str, Any]:
         }
 
 
-# Models that should be exported by default. TinySafe is kept in the config as an
-# optional PyTorch-only experiment, but the standard pipeline uses oxyapi because
-# it loads through the normal Hugging Face/ONNX path.
+# Models that should be exported by default.
 _EXPORT_KEYS = (
     "prompt_injection",
     "jailbreak",
+    "moderation_primary",
     "moderation_fallback",
 )
 

@@ -52,7 +52,7 @@ class SafetyClassifier:
         use_int8: bool = False,
         full_scan_default: bool = False,
         enable_toxic_fallback: bool = False,
-        moderation_backend: str = "oxyapi",
+        moderation_backend: str = "moderationbert",
         lazy: bool = False,
     ) -> None:
         cfg = RuntimeConfig.from_yaml()
@@ -105,7 +105,11 @@ class SafetyClassifier:
         )
         self._load_model("jailbreak", JailbreakClassifier, models_cfg, common)
 
-        mod_key = "moderation_primary" if self.moderation_backend == "tinysafe" else "moderation_fallback"
+        mod_key = (
+            "moderation_fallback"
+            if self.moderation_backend == "oxyapi"
+            else "moderation_primary"
+        )
         self._load_model("moderation", ModerationClassifier, models_cfg, common, cfg_key=mod_key)
 
         if self.enable_toxic_fallback:

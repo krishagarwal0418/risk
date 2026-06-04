@@ -9,6 +9,7 @@ from safety_classifier.config import load_models_config, resolve_path
 _KEYS = (
     "prompt_injection",
     "jailbreak",
+    "moderation_primary",
     "moderation_fallback",
     "toxic_fallback",
 )

@@ -32,7 +32,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--include-raw", action="store_true")
     parser.add_argument("--toxic-fallback", action="store_true")
     parser.add_argument(
-        "--moderation", default="oxyapi", choices=["tinysafe", "oxyapi"]
+        "--moderation",
+        default="moderationbert",
+        choices=["moderationbert", "tinysafe", "oxyapi"],
     )
     return parser
 
