@@ -8,6 +8,7 @@ from collections import Counter
 from safety_classifier.data.splitter import (
     _fasttext_line,
     _head_labels_for,
+    _label_cap_for,
     _labels_under_cap,
 )
 
@@ -58,3 +59,12 @@ def test_labels_under_cap_filters_only_capped_labels():
 
     assert _labels_under_cap(labels, written, cap=2) == [C.TOXICITY]
     assert _labels_under_cap(labels, written, cap=0) == labels
+
+
+def test_label_cap_for_prefers_head_specific_env(monkeypatch):
+    monkeypatch.setenv("SC_MAX_PER_LABEL", "22000")
+    monkeypatch.setenv("SC_MAX_PER_LABEL_HIGH_RISK", "3000")
+
+    assert _label_cap_for("train", "attack") == 22000
+    assert _label_cap_for("train", "high_risk") == 3000
+    assert _label_cap_for("val", "high_risk") == 375

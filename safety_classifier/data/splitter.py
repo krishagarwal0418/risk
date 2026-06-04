@@ -162,24 +162,26 @@ def _head_labels_for(record_labels: list[str], head_labels: tuple[str, ...]) -> 
     return []
 
 
-def _label_cap_for(split: str) -> int:
+def _label_cap_for(split: str, head: str | None = None) -> int:
     """Per-label cap on examples per head (0 = no cap).
 
-    ``SC_MAX_PER_LABEL`` caps every label uniformly so no single class drowns
-    out smaller ones. Val/test get 1/8 to preserve the 80/10/10 ratio.
+    ``SC_MAX_PER_LABEL_<HEAD>`` caps one head, while ``SC_MAX_PER_LABEL`` remains
+    the global fallback. Val/test get 1/8 to preserve the 80/10/10 ratio.
 
     Recommended values:
-      - attack head:    ~20000  (safe 40k, PI 4k, jailbreak 5k → set ~6000)
-      - abuse head:     ~25000  (harassment 22k is the bottleneck → set ~22000)
-      - high_risk head: ~5000   (self_harm/dangerous_info are tiny)
-    A single global value is a compromise; the default 0 applies no cap.
+      - attack head:    SC_MAX_PER_LABEL_ATTACK=22000
+      - abuse head:     SC_MAX_PER_LABEL_ABUSE=22000
+      - high_risk head: SC_MAX_PER_LABEL_HIGH_RISK=3000..5000
 
     ``SC_MAX_SAFE_PER_HEAD`` is kept for backwards-compat but SC_MAX_PER_LABEL
     takes precedence when set.
     """
     import os
 
-    n = int(os.environ.get("SC_MAX_PER_LABEL", "0") or "0")
+    head_key = f"SC_MAX_PER_LABEL_{head.upper()}" if head else ""
+    n = int(os.environ.get(head_key, "0") or "0") if head_key else 0
+    if n <= 0:
+        n = int(os.environ.get("SC_MAX_PER_LABEL", "0") or "0")
     if n <= 0:
         # Fall back to legacy safe-only cap if set.
         n = int(os.environ.get("SC_MAX_SAFE_PER_HEAD", "0") or "0")
@@ -217,8 +219,8 @@ def build_fasttext_files() -> dict[str, Any]:
             for line in in_path.read_text(encoding="utf-8").splitlines()
             if line.strip()
         ]
-        cap = _label_cap_for(split)
         for head, head_labels in head_defs.items():
+            cap = _label_cap_for(split, head)
             out_path = FASTTEXT_DIR / f"{head}_{split}.txt"
             label_written: Counter = Counter()
             with out_path.open("w", encoding="utf-8") as fh:
