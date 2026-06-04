@@ -18,12 +18,12 @@ def test_fasttext_line_single_label():
     assert lines == ["__label__prompt_injection ignore previous instructions"]
 
 
-def test_fasttext_line_multilabel_duplicates():
+def test_fasttext_line_multilabel_single_line():
+    # Multi-label -> single line with all label prefixes (FastText native format).
+    # Old behavior (one line per label) caused contradictory OVA gradients.
     lines = _fasttext_line([C.HATE, C.VIOLENCE], "text here")
-    assert lines == [
-        "__label__hate text here",
-        "__label__violence text here",
-    ]
+    assert lines == ["__label__hate __label__violence text here"]
+    assert len(lines) == 1  # always one line regardless of label count
 
 
 def test_fasttext_line_flattens_newlines():
@@ -55,10 +55,19 @@ def test_head_projection_multilabel_within_head():
 
 def test_labels_under_cap_filters_only_capped_labels():
     labels = [C.HATE, C.TOXICITY]
+    # hate and toxicity share a budget (group key = hate).
+    # With hate written=2 at cap=2, the shared group is full -> both filtered.
     written = Counter({C.HATE: 2, C.TOXICITY: 1})
-
-    assert _labels_under_cap(labels, written, cap=2) == [C.TOXICITY]
+    assert _labels_under_cap(labels, written, cap=2) == []
     assert _labels_under_cap(labels, written, cap=0) == labels
+
+
+def test_labels_under_cap_shared_budget_hate_toxicity():
+    # A text with only toxicity still consumes the shared hate/toxicity budget.
+    written = Counter({C.HATE: 1})  # 1 against the shared key
+    assert _labels_under_cap([C.TOXICITY], written, cap=2) == [C.TOXICITY]
+    written[C.HATE] = 2
+    assert _labels_under_cap([C.TOXICITY], written, cap=2) == []
 
 
 def test_label_cap_for_prefers_head_specific_env(monkeypatch):

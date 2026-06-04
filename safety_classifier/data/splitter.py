@@ -140,19 +140,37 @@ def build_processed_splits() -> dict[str, Any]:
 # FastText file generation
 # --------------------------------------------------------------------------- #
 def _fasttext_line(labels: list[str], text: str) -> list[str]:
-    """One line per label (multi-label -> duplicated lines)."""
+    """Single line with all labels (FastText native multi-label format).
+
+    Writing one line per label causes contradictory OVA gradients: the second
+    line for a hate+toxicity text contains "not hate" signal, which collapses
+    the model toward always predicting toxicity. Multi-label format avoids this.
+    """
     flat = text.replace("\n", " ").strip()
-    return [f"{C.FASTTEXT_LABEL_PREFIX}{lab} {flat}" for lab in labels]
+    prefix = " ".join(f"{C.FASTTEXT_LABEL_PREFIX}{lab}" for lab in labels)
+    return [f"{prefix} {flat}"]
 
 
-def _head_labels_for(record_labels: list[str], head_labels: tuple[str, ...]) -> list[str]:
+def _head_labels_for(
+    record_labels: list[str],
+    head_labels: tuple[str, ...],
+    sources: list[str] | None = None,
+) -> list[str]:
     """Project a record's canonical labels onto a head's label set.
 
     A record contributes to a head if it has a risk label the head covers, OR it
     is safe (safe examples are used in all three heads). Records whose only labels
     are out-of-scope for this head are skipped for that head.
+
+    BeaverTails violence examples (violence,aiding_and_abetting,incitement) are
+    policy/legal discussion text — the model can't find violent-language features.
+    Only text_moderation_410K violence labels (real violent content flagged by
+    OpenAI's API) are reliable for the violence classifier.
     """
     relevant = [lab for lab in record_labels if lab in head_labels and lab != C.SAFE]
+    # Filter out unreliable violence labels from BeaverTails.
+    if C.VIOLENCE in relevant and sources and all(s == "beavertails" for s in sources):
+        relevant = [l for l in relevant if l != C.VIOLENCE]
     if relevant:
         return relevant
     if C.SAFE in record_labels and not any(
@@ -191,10 +209,23 @@ def _label_cap_for(split: str, head: str | None = None) -> int:
 
 
 def _labels_under_cap(labels: list[str], label_written: Counter, cap: int) -> list[str]:
-    """Filter projected labels to those still below the per-label cap."""
+    """Filter projected labels to those still below the per-label cap.
+
+    For the abuse head, hate and toxicity often point to the SAME underlying text
+    (ToxiGen labels both). We count them against a SHARED budget so a text with
+    both labels only consumes one slot from the hate+toxicity pool, keeping the
+    effective class balance honest (22k unique abuse texts vs 22k safe).
+    """
     if cap <= 0:
         return labels
-    return [lab for lab in labels if label_written[lab] < cap]
+    # Shared budget for semantically-overlapping abuse labels.
+    _SHARED_BUDGET_GROUPS = ((C.HATE, C.TOXICITY),)
+    def _group_key(lab: str) -> str:
+        for group in _SHARED_BUDGET_GROUPS:
+            if lab in group:
+                return group[0]  # canonical key for this group
+        return lab
+    return [lab for lab in labels if label_written[_group_key(lab)] < cap]
 
 
 def build_fasttext_files() -> dict[str, Any]:
@@ -225,7 +256,7 @@ def build_fasttext_files() -> dict[str, Any]:
             label_written: Counter = Counter()
             with out_path.open("w", encoding="utf-8") as fh:
                 for rec in records:
-                    projected = _head_labels_for(rec["labels"], head_labels)
+                    projected = _head_labels_for(rec["labels"], head_labels, rec.get("sources"))
                     if not projected:
                         continue
                     writable = _labels_under_cap(projected, label_written, cap)
@@ -233,9 +264,14 @@ def build_fasttext_files() -> dict[str, Any]:
                         continue
                     for line in _fasttext_line(writable, rec["text"]):
                         fh.write(line + "\n")
+                    _SHARED = ((C.HATE, C.TOXICITY),)
+                    def _gkey(l: str) -> str:
+                        for g in _SHARED:
+                            if l in g: return g[0]
+                        return l
                     for lab in writable:
                         counts[head][split][lab] += 1
-                        label_written[lab] += 1
+                        label_written[_gkey(lab)] += 1  # shared budget for hate/toxicity
 
     report = {head: {s: dict(c) for s, c in splits.items()} for head, splits in counts.items()}
     (REPORTS_DIR / "fasttext_data_report.json").write_text(
