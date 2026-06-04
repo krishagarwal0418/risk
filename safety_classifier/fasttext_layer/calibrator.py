@@ -7,8 +7,6 @@ high recall (we'd rather over-route to a transformer than miss an attack).
 
 from __future__ import annotations
 
-import json
-from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +14,7 @@ import yaml
 
 from ..config import repo_root
 from .compat import predict_fasttext
-from .evaluator import _parse_line
+from .evaluator import _read_test
 
 FASTTEXT_DATA_DIR = repo_root() / "data" / "fasttext"
 MODELS_DIR = repo_root() / "models" / "fasttext"
@@ -28,12 +26,12 @@ _HIGH_PRECISION_TARGET = 0.90
 
 
 def _score_at_threshold(
-    gold: list[str], probs: list[dict[str, float]], label: str, thr: float
+    gold: list[set[str]], probs: list[dict[str, float]], label: str, thr: float
 ) -> dict[str, float]:
     tp = fp = fn = 0
     for g, p in zip(gold, probs):
         predicted = p.get(label, 0.0) >= thr
-        actual = g == label
+        actual = label in g
         if predicted and actual:
             tp += 1
         elif predicted and not actual:
@@ -58,13 +56,9 @@ def calibrate_head(head: str) -> dict[str, Any]:
     model = fasttext.load_model(str(ftz))
     labels = sorted({lab[len("__label__"):] for lab in model.get_labels()})
 
-    gold: list[str] = []
+    gold: list[set[str]] = []
     probs: list[dict[str, float]] = []
-    for line in val_file.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        g, text = _parse_line(line)
+    for g, text in _read_test(val_file):
         gold.append(g)
         pred_labels, pred_probs = predict_fasttext(model, text, k=-1)
         probs.append(

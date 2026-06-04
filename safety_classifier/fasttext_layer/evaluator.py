@@ -38,15 +38,29 @@ def _parse_line(line: str) -> tuple[str, str]:
     return label, text
 
 
-def _read_test(test_file: Path) -> list[tuple[str, str]]:
-    return [
-        _parse_line(line.strip())
-        for line in test_file.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
+def _read_test(test_file: Path) -> list[tuple[set[str], str]]:
+    """Return grouped multi-label examples from a FastText file.
+
+    FastText files duplicate multi-label examples as one line per label. A
+    line-by-line top-1 evaluation incorrectly marks the same text wrong when the
+    model predicts another valid label for that text. Grouping by text recovers
+    the original multi-label gold set.
+    """
+    grouped: dict[str, set[str]] = {}
+    order: list[str] = []
+    for line in test_file.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        label, text = _parse_line(line)
+        if text not in grouped:
+            grouped[text] = set()
+            order.append(text)
+        grouped[text].add(label)
+    return [(grouped[text], text) for text in order]
 
 
-def evaluate_model(model: Any, test_file: Path) -> dict[str, Any]:
+def evaluate_model(model: Any, test_file: Path, threshold: float = 0.50) -> dict[str, Any]:
     """Compute metrics + latency for a loaded model against a test file."""
     from ..reporting import percentiles
 
@@ -59,26 +73,49 @@ def evaluate_model(model: Any, test_file: Path) -> dict[str, Any]:
     fp_samples: list[dict] = []
     fn_samples: list[dict] = []
     latencies: list[float] = []
-    correct = 0
+    top1_correct = 0
     total = 0
 
     for gold, text in examples:
         start = time.perf_counter()
-        pred_labels, _ = predict_fasttext(model, text, k=1)
+        pred_labels, pred_probs = predict_fasttext(model, text, k=-1)
         latencies.append((time.perf_counter() - start) * 1000)
+        probs = {
+            lab[len("__label__"):]: float(prob)
+            for lab, prob in zip(pred_labels, pred_probs)
+        }
         pred = pred_labels[0][len("__label__"):] if pred_labels else "unknown"
+        predicted = {lab for lab, prob in probs.items() if prob >= threshold}
+        if not predicted and pred != "unknown":
+            predicted = {pred}
         total += 1
-        confusion[gold][pred] += 1
-        if pred == gold:
-            correct += 1
-            tp[gold] += 1
-        else:
-            fp[pred] += 1
-            fn[gold] += 1
+        confusion["|".join(sorted(gold))][pred] += 1
+        if pred in gold:
+            top1_correct += 1
+        for lab in labels:
+            actual = lab in gold
+            is_predicted = lab in predicted
+            if is_predicted and actual:
+                tp[lab] += 1
+            elif is_predicted and not actual:
+                fp[lab] += 1
+            elif not is_predicted and actual:
+                fn[lab] += 1
+        if not predicted <= gold or not gold <= predicted:
             if len(fp_samples) < _MAX_ERROR_SAMPLES:
-                fp_samples.append({"text": text[:200], "gold": gold, "pred": pred})
+                fp_samples.append({
+                    "text": text[:200],
+                    "gold": sorted(gold),
+                    "predicted": sorted(predicted),
+                    "top1": pred,
+                })
             if len(fn_samples) < _MAX_ERROR_SAMPLES:
-                fn_samples.append({"text": text[:200], "gold": gold, "pred": pred})
+                fn_samples.append({
+                    "text": text[:200],
+                    "gold": sorted(gold),
+                    "predicted": sorted(predicted),
+                    "top1": pred,
+                })
 
     per_label: dict[str, dict[str, float]] = {}
     f1s, precs, recs, weights = [], [], [], []
@@ -99,7 +136,9 @@ def evaluate_model(model: Any, test_file: Path) -> dict[str, Any]:
     weighted_f1 = sum(f * w for f, w in zip(f1s, weights)) / sum(weights) if sum(weights) else 0.0
 
     return {
-        "accuracy": round(correct / total, 4) if total else 0.0,
+        "accuracy": round(top1_correct / total, 4) if total else 0.0,
+        "top1_accuracy": round(top1_correct / total, 4) if total else 0.0,
+        "score_threshold": threshold,
         "macro_precision": round(sum(precs) / len(precs), 4) if precs else 0.0,
         "macro_recall": round(sum(recs) / len(recs), 4) if recs else 0.0,
         "macro_f1": round(macro_f1, 4),
