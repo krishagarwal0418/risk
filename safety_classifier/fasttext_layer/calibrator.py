@@ -15,6 +15,7 @@ from typing import Any
 import yaml
 
 from ..config import repo_root
+from .compat import predict_fasttext
 from .evaluator import _parse_line
 
 FASTTEXT_DATA_DIR = repo_root() / "data" / "fasttext"
@@ -65,7 +66,7 @@ def calibrate_head(head: str) -> dict[str, Any]:
             continue
         g, text = _parse_line(line)
         gold.append(g)
-        pred_labels, pred_probs = model.predict(text, k=-1)
+        pred_labels, pred_probs = predict_fasttext(model, text, k=-1)
         probs.append(
             {l[len("__label__"):]: float(p) for l, p in zip(pred_labels, pred_probs)}
         )

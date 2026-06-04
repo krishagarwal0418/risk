@@ -9,6 +9,7 @@ from typing import Any, Optional
 
 from .. import constants as C
 from ..config import load_models_config, resolve_path
+from .compat import predict_fasttext
 
 # Canonical label -> the transformer model key that confirms it.
 _LABEL_TO_MODEL: dict[str, str] = {
@@ -78,7 +79,7 @@ class FastTextSafetyRouter:
     @staticmethod
     def _predict_head(model: Any, text: str) -> dict[str, float]:
         """Return label->prob for a single head using one-vs-all output."""
-        labels, probs = model.predict(text.replace("\n", " "), k=-1)
+        labels, probs = predict_fasttext(model, text.replace("\n", " "), k=-1)
         out: dict[str, float] = {}
         for lab, prob in zip(labels, probs):
             out[lab[len("__label__"):]] = float(prob)

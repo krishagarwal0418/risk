@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import repo_root
+from .compat import predict_fasttext
 
 FASTTEXT_DATA_DIR = repo_root() / "data" / "fasttext"
 MODELS_DIR = repo_root() / "models" / "fasttext"
@@ -63,7 +64,7 @@ def evaluate_model(model: Any, test_file: Path) -> dict[str, Any]:
 
     for gold, text in examples:
         start = time.perf_counter()
-        pred_labels, _ = model.predict(text, k=1)
+        pred_labels, _ = predict_fasttext(model, text, k=1)
         latencies.append((time.perf_counter() - start) * 1000)
         pred = pred_labels[0][len("__label__"):] if pred_labels else "unknown"
         total += 1
