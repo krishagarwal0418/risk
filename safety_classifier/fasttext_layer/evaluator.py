@@ -21,6 +21,9 @@ MODELS_DIR = repo_root() / "models" / "fasttext"
 REPORTS_DIR = repo_root() / "reports"
 
 _MAX_ERROR_SAMPLES = 25
+_THRESHOLDS = tuple(round(0.05 * i, 2) for i in range(1, 19))
+_ROUTE_FLOOR = 0.05
+_HIGH_RECALL_TARGET = 0.90
 
 
 def _load_model(path: str):
@@ -60,6 +63,73 @@ def _read_test(test_file: Path) -> list[tuple[set[str], str]]:
     return [(grouped[text], text) for text in order]
 
 
+def _score_label_at_threshold(
+    gold_sets: list[set[str]],
+    probs: list[dict[str, float]],
+    label: str,
+    threshold: float,
+) -> dict[str, float]:
+    tp = fp = fn = 0
+    for gold, pred in zip(gold_sets, probs):
+        predicted = pred.get(label, 0.0) >= threshold
+        actual = label in gold
+        if predicted and actual:
+            tp += 1
+        elif predicted and not actual:
+            fp += 1
+        elif not predicted and actual:
+            fn += 1
+    precision = tp / (tp + fp) if (tp + fp) else 0.0
+    recall = tp / (tp + fn) if (tp + fn) else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
+    return {
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
+        "support": tp + fn,
+        "predicted": tp + fp,
+    }
+
+
+def _threshold_sweep(
+    labels: list[str],
+    gold_sets: list[set[str]],
+    probs: list[dict[str, float]],
+) -> dict[str, dict[str, float]]:
+    out: dict[str, dict[str, float]] = {}
+    for label in labels:
+        sweep = {
+            threshold: _score_label_at_threshold(gold_sets, probs, label, threshold)
+            for threshold in _THRESHOLDS
+        }
+        best_f1_threshold = max(sweep, key=lambda t: sweep[t]["f1"])
+        high_recall_candidates = [
+            threshold
+            for threshold in _THRESHOLDS
+            if sweep[threshold]["recall"] >= _HIGH_RECALL_TARGET
+        ]
+        high_recall_threshold = (
+            max(high_recall_candidates) if high_recall_candidates else best_f1_threshold
+        )
+        floor = sweep[_ROUTE_FLOOR]
+        high_recall = sweep[high_recall_threshold]
+        best_f1 = sweep[best_f1_threshold]
+        out[label] = {
+            "support": int(best_f1["support"]),
+            "best_f1_threshold": best_f1_threshold,
+            "best_f1": round(best_f1["f1"], 4),
+            "best_f1_precision": round(best_f1["precision"], 4),
+            "best_f1_recall": round(best_f1["recall"], 4),
+            "high_recall_threshold": high_recall_threshold,
+            "high_recall_precision": round(high_recall["precision"], 4),
+            "high_recall_recall": round(high_recall["recall"], 4),
+            "route_floor_precision": round(floor["precision"], 4),
+            "route_floor_recall": round(floor["recall"], 4),
+            "route_floor_predicted": int(floor["predicted"]),
+        }
+    return out
+
+
 def evaluate_model(model: Any, test_file: Path, threshold: float = 0.50) -> dict[str, Any]:
     """Compute metrics + latency for a loaded model against a test file."""
     from ..reporting import percentiles
@@ -73,6 +143,8 @@ def evaluate_model(model: Any, test_file: Path, threshold: float = 0.50) -> dict
     fp_samples: list[dict] = []
     fn_samples: list[dict] = []
     latencies: list[float] = []
+    gold_sets: list[set[str]] = []
+    prob_rows: list[dict[str, float]] = []
     top1_correct = 0
     total = 0
 
@@ -84,6 +156,8 @@ def evaluate_model(model: Any, test_file: Path, threshold: float = 0.50) -> dict
             lab[len("__label__"):]: float(prob)
             for lab, prob in zip(pred_labels, pred_probs)
         }
+        gold_sets.append(gold)
+        prob_rows.append(probs)
         pred = pred_labels[0][len("__label__"):] if pred_labels else "unknown"
         predicted = {lab for lab, prob in probs.items() if prob >= threshold}
         if not predicted and pred != "unknown":
@@ -134,6 +208,16 @@ def evaluate_model(model: Any, test_file: Path, threshold: float = 0.50) -> dict
 
     macro_f1 = sum(f1s) / len(f1s) if f1s else 0.0
     weighted_f1 = sum(f * w for f, w in zip(f1s, weights)) / sum(weights) if sum(weights) else 0.0
+    action = _threshold_sweep(labels, gold_sets, prob_rows)
+    non_safe_action = [m for lab, m in action.items() if lab != "safe"]
+    macro_route_floor_recall = (
+        sum(m["route_floor_recall"] for m in non_safe_action) / len(non_safe_action)
+        if non_safe_action else 0.0
+    )
+    macro_best_f1 = (
+        sum(m["best_f1"] for m in non_safe_action) / len(non_safe_action)
+        if non_safe_action else 0.0
+    )
 
     return {
         "accuracy": round(top1_correct / total, 4) if total else 0.0,
@@ -142,8 +226,11 @@ def evaluate_model(model: Any, test_file: Path, threshold: float = 0.50) -> dict
         "macro_precision": round(sum(precs) / len(precs), 4) if precs else 0.0,
         "macro_recall": round(sum(recs) / len(recs), 4) if recs else 0.0,
         "macro_f1": round(macro_f1, 4),
+        "macro_best_f1": round(macro_best_f1, 4),
+        "macro_route_floor_recall": round(macro_route_floor_recall, 4),
         "weighted_f1": round(weighted_f1, 4),
         "per_label": per_label,
+        "action_metrics": action,
         "confusion_matrix": {g: dict(p) for g, p in confusion.items()},
         "false_positive_samples": fp_samples,
         "false_negative_samples": fn_samples,

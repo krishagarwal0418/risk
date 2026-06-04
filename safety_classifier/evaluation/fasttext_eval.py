@@ -102,7 +102,13 @@ def evaluate_head_report(head: str) -> dict[str, Any]:
         overview.add("accuracy", ftz_metrics["accuracy"])
         overview.add("macro_precision", ftz_metrics["macro_precision"])
         overview.add("macro_recall", ftz_metrics["macro_recall"])
-        overview.add("macro_f1", ftz_metrics["macro_f1"])
+        overview.add("macro_f1_at_0.50", ftz_metrics["macro_f1"])
+        overview.add("macro_best_f1_non_safe", ftz_metrics.get("macro_best_f1", "n/a"))
+        overview.add(
+            "macro_action_recall_at_0.05_non_safe",
+            ftz_metrics.get("macro_route_floor_recall", "n/a"),
+        )
+        overview.add("top1_any_true_label_accuracy", ftz_metrics.get("top1_accuracy", "n/a"))
         overview.add("weighted_f1", ftz_metrics["weighted_f1"])
         overview.add("avg_latency_ms", ftz_metrics["latency_ms"]["avg"])
         overview.add("p95_latency_ms", ftz_metrics["latency_ms"]["p95"])
@@ -119,8 +125,36 @@ def evaluate_head_report(head: str) -> dict[str, Any]:
             for lab, m in ftz_metrics["per_label"].items()
         ]
         tables.append(
-            ("Per-Label (.ftz)", ["Label", "Precision", "Recall", "F1", "Support"], per_label_rows)
+            (
+                "Per-Label at score >= 0.50 (.ftz)",
+                ["Label", "Precision", "Recall", "F1", "Support"],
+                per_label_rows,
+            )
         )
+        action_rows = [
+            [
+                lab,
+                m["support"],
+                m["route_floor_recall"],
+                m["route_floor_precision"],
+                m["route_floor_predicted"],
+                m["high_recall_threshold"],
+                m["high_recall_recall"],
+                m["high_recall_precision"],
+                m["best_f1_threshold"],
+                m["best_f1"],
+            ]
+            for lab, m in ftz_metrics.get("action_metrics", {}).items()
+            if lab != "safe"
+        ]
+        tables.append((
+            "Action / Routing Metrics (.ftz)",
+            [
+                "Label", "Support", "Recall@0.05", "Precision@0.05", "Pred@0.05",
+                "High-recall thr", "Recall@HR", "Precision@HR", "Best-F1 thr", "Best F1",
+            ],
+            action_rows,
+        ))
     if comparison:
         cmp_rows = [
             ["accuracy_diff", comparison["accuracy_diff"]],
@@ -139,11 +173,16 @@ def evaluate_head_report(head: str) -> dict[str, Any]:
         warnings=warnings,
         failures=failures,
     )
-    macro = ftz_metrics["macro_f1"] if ftz_metrics else "n/a"
+    macro = ftz_metrics.get("macro_best_f1", ftz_metrics["macro_f1"]) if ftz_metrics else "n/a"
+    action_recall = ftz_metrics.get("macro_route_floor_recall", "n/a") if ftz_metrics else "n/a"
     print_summary(
         f"FastText {head} head", status,
         ["Metric", "Value"],
-        [["macro_f1", macro], ["size_reduction", f"{size_reduction}%" if size_reduction else "n/a"]],
+        [
+            ["macro_best_f1_non_safe", macro],
+            ["macro_action_recall@0.05_non_safe", action_recall],
+            ["size_reduction", f"{size_reduction}%" if size_reduction else "n/a"],
+        ],
     )
     return summary
 

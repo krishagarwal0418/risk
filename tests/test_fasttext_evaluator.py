@@ -48,3 +48,19 @@ def test_evaluate_model_accepts_any_true_label_for_top1(tmp_path: Path):
     assert metrics["top1_accuracy"] == 1.0
     assert metrics["per_label"]["hate"]["recall"] == 1.0
     assert metrics["per_label"]["toxicity"]["recall"] == 1.0
+
+
+def test_evaluate_model_reports_action_recall_metrics(tmp_path: Path):
+    path = tmp_path / "abuse_test.txt"
+    path.write_text(
+        "__label__hate same text\n"
+        "__label__toxicity same text\n",
+        encoding="utf-8",
+    )
+
+    metrics = evaluate_model(_MultiLabelModel(), path, threshold=0.5)
+
+    assert metrics["macro_route_floor_recall"] == 1.0
+    assert metrics["macro_best_f1"] == 1.0
+    assert metrics["action_metrics"]["hate"]["route_floor_recall"] == 1.0
+    assert metrics["action_metrics"]["toxicity"]["route_floor_recall"] == 1.0
