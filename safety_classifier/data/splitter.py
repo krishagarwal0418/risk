@@ -140,6 +140,21 @@ def _head_labels_for(record_labels: list[str], head_labels: tuple[str, ...]) -> 
     return []
 
 
+def _safe_cap_for(split: str) -> int:
+    """Per-split cap on safe-only examples per head (0 = no cap).
+
+    Controlled by env var ``SC_MAX_SAFE_PER_HEAD`` (applies to train; val/test get
+    1/8 of it to keep the ~80/10/10 ratio). Capping the dominant ``safe`` class
+    rebalances the heads and speeds FastText training without touching risk labels.
+    """
+    import os
+
+    n = int(os.environ.get("SC_MAX_SAFE_PER_HEAD", "0") or "0")
+    if n <= 0:
+        return 0
+    return n if split == "train" else max(n // 8, 1)
+
+
 def build_fasttext_files() -> dict[str, Any]:
     """Generate per-head FastText train/val/test files from processed splits."""
     FASTTEXT_DIR.mkdir(parents=True, exist_ok=True)
@@ -162,17 +177,24 @@ def build_fasttext_files() -> dict[str, Any]:
             for line in in_path.read_text(encoding="utf-8").splitlines()
             if line.strip()
         ]
+        safe_cap = _safe_cap_for(split)
         for head, head_labels in head_defs.items():
             out_path = FASTTEXT_DIR / f"{head}_{split}.txt"
+            safe_written = 0
             with out_path.open("w", encoding="utf-8") as fh:
                 for rec in records:
                     projected = _head_labels_for(rec["labels"], head_labels)
                     if not projected:
                         continue
+                    # Downsample the dominant safe-only class if a cap is set.
+                    if projected == [C.SAFE] and safe_cap and safe_written >= safe_cap:
+                        continue
                     for line in _fasttext_line(projected, rec["text"]):
                         fh.write(line + "\n")
                     for lab in projected:
                         counts[head][split][lab] += 1
+                    if projected == [C.SAFE]:
+                        safe_written += 1
 
     report = {head: {s: dict(c) for s, c in splits.items()} for head, splits in counts.items()}
     (REPORTS_DIR / "fasttext_data_report.json").write_text(
