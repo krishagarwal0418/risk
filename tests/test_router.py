@@ -34,6 +34,14 @@ def test_routes_self_harm_to_moderation_model():
     assert result["scores"][C.SELF_HARM] >= 0.7
 
 
+def test_dangerous_fasttext_score_does_not_force_moderation_model():
+    ft = MockFastText({C.DANGEROUS_INFORMATION: 0.9}, ["moderation"])
+    router = Router(fasttext_router=ft, models=_models(), thresholds=Thresholds())
+    result = router.route("high risk placeholder sentence")
+    assert "tinysafe" not in result["triggered_models"]
+    assert result["internal_scores"][C.DANGEROUS_INFORMATION] == 0.9
+
+
 def test_safe_text_skips_transformers():
     ft = MockFastText({}, [])  # nothing over route threshold
     router = Router(fasttext_router=ft, models=_models(), thresholds=Thresholds())

@@ -21,8 +21,6 @@ _LABEL_TO_MODEL: dict[str, str] = {
     C.SEXUAL: "moderation",
     C.VIOLENCE: "moderation",
     C.SELF_HARM: "moderation",
-    C.DANGEROUS_INFORMATION: "moderation",
-    C.ILLEGAL_ACTIVITY: "moderation",
 }
 
 

@@ -20,18 +20,25 @@ from ..reporting import ReportSection, Status, percentiles, print_summary, write
 
 PROCESSED_DIR = repo_root() / "data" / "processed"
 
+_MODERATION_SUPPORTED_LABELS = [
+    C.TOXICITY,
+    C.HATE,
+    C.HARASSMENT,
+    C.SEXUAL,
+    C.VIOLENCE,
+    C.SELF_HARM,
+]
+
 # model_key -> (wrapper import path, cfg key, target canonical labels)
 MODEL_TARGETS: dict[str, tuple[str, str, list[str]]] = {
     "prompt_injection": ("PromptInjectionClassifier", "prompt_injection", [C.PROMPT_INJECTION]),
     "jailbreak": ("JailbreakClassifier", "jailbreak", [C.JAILBREAK]),
-    "moderation_primary": ("ModerationClassifier", "moderation_primary", [
-        C.TOXICITY, C.HATE, C.HARASSMENT, C.SEXUAL, C.VIOLENCE,
-        C.SELF_HARM, C.DANGEROUS_INFORMATION, C.ILLEGAL_ACTIVITY,
-    ]),
-    "moderation_fallback": ("ModerationClassifier", "moderation_fallback", [
-        C.TOXICITY, C.HATE, C.HARASSMENT, C.SEXUAL, C.VIOLENCE,
-        C.SELF_HARM, C.DANGEROUS_INFORMATION, C.ILLEGAL_ACTIVITY,
-    ]),
+    "moderation_primary": (
+        "ModerationClassifier", "moderation_primary", _MODERATION_SUPPORTED_LABELS
+    ),
+    "moderation_fallback": (
+        "ModerationClassifier", "moderation_fallback", _MODERATION_SUPPORTED_LABELS
+    ),
     "toxic_fallback": ("ToxicFallbackClassifier", "toxic_fallback", [C.TOXICITY, C.HATE]),
 }
 

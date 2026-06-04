@@ -44,7 +44,7 @@ _MODEL_LABELS: dict[str, tuple[str, ...]] = {
     "jailbreak": (C.JAILBREAK,),
     "moderation": (
         C.TOXICITY, C.HATE, C.HARASSMENT, C.SEXUAL, C.VIOLENCE,
-        C.SELF_HARM, C.DANGEROUS_INFORMATION, C.ILLEGAL_ACTIVITY,
+        C.SELF_HARM,
     ),
     "toxic": (C.TOXICITY, C.HATE),
 }
@@ -112,7 +112,7 @@ class Router:
         # Moderation routing: any abuse/high-risk label over its route threshold.
         moderation_labels = (
             C.TOXICITY, C.HATE, C.HARASSMENT, C.SEXUAL, C.VIOLENCE,
-            C.SELF_HARM, C.DANGEROUS_INFORMATION, C.ILLEGAL_ACTIVITY,
+            C.SELF_HARM,
         )
         for label in moderation_labels:
             if ft_scores.get(label, 0.0) >= self.thresholds.route(label):
