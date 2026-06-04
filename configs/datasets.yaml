@@ -106,4 +106,16 @@ datasets:
     loader: hf
     hf_name: sorry-bench/sorry-bench-202406
     kind: sorry_bench
+    enabled: false   # gated - disabled
+
+  - name: malicious_instruct
+    loader: hf
+    hf_name: allenai/malicious-instruct
+    kind: sorry_bench   # same label taxonomy (harmful prompt categories)
+    enabled: true
+
+  - name: hex_phi
+    loader: hf
+    hf_name: LLM-LAT/harmful-dataset
+    kind: sorry_bench   # harmful prompts with category labels
     enabled: true
