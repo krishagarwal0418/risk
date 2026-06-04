@@ -204,7 +204,18 @@ def adapt_wildguard(rows: Iterable[dict], source: str) -> Iterator[UnifiedRecord
 
 
 def adapt_beavertails(rows: Iterable[dict], source: str) -> Iterator[UnifiedRecord]:
-    """PKU-Alignment/BeaverTails: ``is_safe`` + ``category`` dict."""
+    """PKU-Alignment/BeaverTails: ``is_safe`` + ``category`` dict.
+
+    BeaverTails contains the SAME prompt twice: once with a safe response
+    (is_safe=True) and once with a harmful response (is_safe=False). The
+    splitter deduplicates by prompt-text hash and keeps the first occurrence.
+    Since safe rows appear first in the iteration order, the harmful label was
+    being silently discarded — causing dangerous_information to drop from
+    20k raw to 843 processed and self_harm from 2.4k to 687.
+
+    Fix: skip is_safe=True rows entirely. BeaverTails prompts are harmful
+    requests by design; we have 400k+ safe examples from other sources.
+    """
     cat_map = {
         "animal_abuse": C.VIOLENCE,
         "child_abuse": C.SEXUAL,
@@ -226,8 +237,7 @@ def adapt_beavertails(rows: Iterable[dict], source: str) -> Iterator[UnifiedReco
         if not text:
             continue
         if row.get("is_safe"):
-            yield _rec(text, [C.SAFE], source)
-            continue
+            continue  # skip — safe version of a harmful prompt poisons dedup
         category = row.get("category", {})
         labels = []
         if isinstance(category, dict):
@@ -241,51 +251,31 @@ def adapt_beavertails(rows: Iterable[dict], source: str) -> Iterator[UnifiedReco
 def adapt_aegis(rows: Iterable[dict], source: str) -> Iterator[UnifiedRecord]:
     """nvidia/Aegis-AI-Content-Safety-Dataset-1.0.
 
-    Schema: ``text_type``, ``text`` (the prompt), ``labels_0`` / ``labels_1`` (annotator
-    labels as strings like "Safe", "Needs Caution", "Needs Intervention", "Sensitive").
-    ``aegis_label`` (if present) is the adjudicated label string such as
-    "Violence", "Sexual", "Suicide and Self Harm", "Weapons / Arms", etc.
-    We use ``aegis_label`` when present, else majority of annotator labels.
+    Real schema (confirmed from data): num_annotations, id, text, text_type,
+    labels_0..labels_4 where values are "Safe" / "Needs Caution" /
+    "Needs Intervention" / "Other" / "None".  NO fine-grained harm categories.
+
+    Strategy: majority "Needs Intervention" → skip (unknown category, can't
+    assign a specific label); majority "Safe"/"Needs Caution" → safe.
+    This avoids polluting the safe pool with borderline content and avoids
+    emitting meaningless "unknown" rows that get dropped by the splitter anyway.
     """
-    _label_map = {
-        "safe": C.SAFE,
-        "needs caution": C.SAFE,          # borderline but not a clear risk label
-        "sensitive": C.SAFE,
-        "needs intervention": C.UNKNOWN,   # will be overridden by aegis_label below
-        # Canonical aegis_label strings -> external labels passed to label_mapper.
-        "violence": "violence",
-        "sexual": "sexual",
-        "suicide and self harm": "self_harm",
-        "weapons / arms": "dangerous_information",
-        "hate / identity hate": "hate",
-        "harassment": "harassment",
-        "illegal activity": "illegal_activity",
-        "controlled / regulated substances": "dangerous_information",
-        "cyberattack": "dangerous_information",
-        "profanity": "toxicity",
-        "needs caution / sensitive topics": C.SAFE,
-        "criminal planning": "illegal_activity",
-        "child sexual abuse material": "sexual",
-    }
     for row in rows:
         text = _first_text(row)
         if not text:
             continue
-        raw = str(row.get("aegis_label", "") or "").strip().lower()
-        if raw and raw in _label_map:
-            mapped = _label_map[raw]
-            labels = [mapped] if mapped else [C.UNKNOWN]
-        else:
-            # Fall back to annotator vote: any "needs intervention" or known harm label.
-            votes = [
-                str(row.get(f"labels_{i}", "") or "").strip().lower()
-                for i in range(4)
-            ]
-            labels = list({
-                _label_map.get(v, C.UNKNOWN)
-                for v in votes if v and v not in ("", "safe", "needs caution", "sensitive")
-            }) or [C.SAFE]
-        yield _rec(text, labels, source)
+        votes = [
+            str(row.get(f"labels_{i}", "") or "").strip().lower()
+            for i in range(5)
+            if str(row.get(f"labels_{i}", "") or "").strip().lower()
+               not in ("none", "other", "")
+        ]
+        if not votes:
+            continue
+        intervention = sum(1 for v in votes if "intervention" in v)
+        if intervention > len(votes) / 2:
+            continue  # genuinely unsafe but no category → skip
+        yield _rec(text, [C.SAFE], source)
 
 
 def adapt_do_not_answer(rows: Iterable[dict], source: str) -> Iterator[UnifiedRecord]:
