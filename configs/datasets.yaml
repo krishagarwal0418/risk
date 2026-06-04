@@ -1,0 +1,87 @@
+# Dataset registry. Each entry is attempted by the downloader; unavailable or gated
+# datasets are skipped cleanly and reported. `kind` selects the adapter to use.
+#
+# loader:
+#   hf      -> datasets.load_dataset(hf_name, config?, split?)
+#   local   -> read local CSV/JSONL from data/custom/
+
+datasets:
+  # ---------------- prompt injection / jailbreak ----------------
+  - name: deepset_prompt_injections
+    loader: hf
+    hf_name: deepset/prompt-injections
+    kind: prompt_injection
+    enabled: true
+
+  - name: jackhhao_jailbreak
+    loader: hf
+    hf_name: jackhhao/jailbreak-classification
+    kind: jailbreak
+    enabled: true
+
+  - name: harelix_prompt_injection_mixed
+    loader: hf
+    hf_name: Harelix/Prompt-Injection-Mixed-Techniques-2024
+    kind: prompt_injection
+    enabled: true
+
+  - name: salad_data
+    loader: hf
+    hf_name: OpenSafetyLab/Salad-Data
+    config: attack_enhanced_set
+    kind: salad
+    enabled: true
+
+  - name: xstest
+    loader: hf
+    hf_name: natolambert/xstest-v2-copy
+    kind: xstest
+    enabled: true
+
+  - name: in_the_wild_jailbreak
+    loader: hf
+    hf_name: TrustAIRLab/in-the-wild-jailbreak-prompts
+    config: jailbreak_2023_12_25
+    kind: jailbreak
+    enabled: true
+
+  # ---------------- toxicity / hate / harassment ----------------
+  - name: jigsaw_toxic
+    loader: hf
+    hf_name: google/jigsaw_toxicity_pred
+    kind: jigsaw
+    enabled: false   # gated / needs manual download; enable when available locally
+
+  - name: toxic_chat
+    loader: hf
+    hf_name: lmsys/toxic-chat
+    config: toxicchat0124
+    kind: toxicchat
+    enabled: true
+
+  - name: toxigen
+    loader: hf
+    hf_name: toxigen/toxigen-data
+    config: train
+    kind: toxigen
+    enabled: true
+
+  # ---------------- broad moderation ----------------
+  - name: text_moderation_410k
+    loader: hf
+    hf_name: ifmain/text-moderation-410K
+    kind: moderation_410k
+    enabled: true
+
+  - name: wildguardmix
+    loader: hf
+    hf_name: allenai/wildguardmix
+    config: wildguardtrain
+    kind: wildguard
+    enabled: true
+
+  - name: beavertails
+    loader: hf
+    hf_name: PKU-Alignment/BeaverTails
+    kind: beavertails
+    enabled: true

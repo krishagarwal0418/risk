@@ -1,0 +1,57 @@
+# Starting thresholds per canonical label.
+# route:   FastText score at/above this routes to the relevant transformer model.
+# review:  merged score at/above this marks the result for human review.
+# block:   merged score at/above this blocks the request.
+#
+# These are STARTING values. Use safety_classifier.fasttext_layer.calibrator and
+# routing.thresholds calibration helpers to tune them on validation data.
+
+prompt_injection:
+  route: 0.20
+  review: 0.50
+  block: 0.80
+
+jailbreak:
+  route: 0.20
+  review: 0.50
+  block: 0.80
+
+toxicity:
+  route: 0.20
+  review: 0.60
+  block: 0.85
+
+hate:
+  route: 0.20
+  review: 0.50
+  block: 0.80
+
+sexual:
+  route: 0.20
+  review: 0.60
+  block: 0.85
+
+violence:
+  route: 0.20
+  review: 0.60
+  block: 0.85
+
+self_harm:
+  route: 0.15
+  review: 0.35
+  block: 0.70
+
+harassment:
+  route: 0.20
+  review: 0.60
+  block: 0.85
+
+dangerous_information:
+  route: 0.20
+  review: 0.50
+  block: 0.80
+
+illegal_activity:
+  route: 0.20
+  review: 0.50
+  block: 0.80

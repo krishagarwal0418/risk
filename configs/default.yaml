@@ -1,0 +1,30 @@
+# Default runtime configuration for the SafetyClassifier.
+
+runtime:
+  device: cuda          # cuda | cpu  (falls back to cpu automatically if cuda missing)
+  backend: pytorch      # pytorch | onnx | onnx_int8
+  use_fasttext: true
+  use_onnx: false
+  use_int8: false
+  full_scan_default: false
+  enable_toxic_fallback: false
+  moderation_backend: tinysafe   # tinysafe | oxyapi
+
+inference:
+  max_length: 128
+  fp16_on_cuda: true
+  batch_size: 16
+
+windowing:
+  enabled: true
+  window_token_budget: 128
+  long_text_token_threshold: 200
+
+logging:
+  log_raw_text: false   # NEVER log raw user text by default
+  log_text_hash: true
+
+# Medium-confidence band that triggers the optional toxic fallback model.
+toxic_fallback:
+  medium_low: 0.30
+  medium_high: 0.70
