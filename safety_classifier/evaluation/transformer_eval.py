@@ -95,7 +95,9 @@ def _gpu_memory_mb() -> float | None:
     return None
 
 
-def _evaluate_one(model_key: str, device: str, limit: int | None) -> dict[str, Any]:
+def _evaluate_one(
+    model_key: str, device: str, limit: int | None, batch_size: int = 64
+) -> dict[str, Any]:
     from .. import transformers_layer as TL
 
     cls_name, cfg_key, targets = MODEL_TARGETS[model_key]
@@ -115,16 +117,21 @@ def _evaluate_one(model_key: str, device: str, limit: int | None) -> dict[str, A
     score_by_label: dict[str, list[float]] = {t: [] for t in targets}
     latencies: list[float] = []
 
-    for row in rows:
-        text = row["text"]
-        labels = set(row.get("labels", []))
+    # Batched inference so the GPU is actually utilised (one padded forward pass
+    # per batch instead of one per example).
+    for i in range(0, len(rows), batch_size):
+        chunk = rows[i : i + batch_size]
+        texts = [r["text"] for r in chunk]
         start = time.perf_counter()
-        result = model.classify(text)
-        latencies.append((time.perf_counter() - start) * 1000)
-        scores = result["scores"]
-        for t in targets:
-            gold_by_label[t].append(1 if t in labels else 0)
-            score_by_label[t].append(scores.get(t, 0.0))
+        results = model.classify_batch(texts)
+        per_example_ms = (time.perf_counter() - start) * 1000 / max(len(texts), 1)
+        for row, result in zip(chunk, results):
+            labels = set(row.get("labels", []))
+            scores = result["scores"]
+            latencies.append(per_example_ms)
+            for t in targets:
+                gold_by_label[t].append(1 if t in labels else 0)
+                score_by_label[t].append(scores.get(t, 0.0))
 
     per_label = {
         t: _binary_metrics(gold_by_label[t], score_by_label[t])
@@ -152,6 +159,7 @@ def run_baseline_eval(
     device: str = "cuda",
     include_toxic_fallback: bool = False,
     limit: int | None = 2000,
+    batch_size: int = 64,
 ) -> dict[str, Any]:
     keys = ["prompt_injection", "jailbreak", "moderation_primary", "moderation_fallback"]
     if include_toxic_fallback:
@@ -161,7 +169,7 @@ def run_baseline_eval(
     warnings: list[str] = []
     for key in keys:
         try:
-            results[key] = _evaluate_one(key, device, limit)
+            results[key] = _evaluate_one(key, device, limit, batch_size=batch_size)
         except Exception as exc:  # noqa: BLE001
             results[key] = {"model_key": key, "status": "error", "error": str(exc)}
         if results[key].get("status") != "ok":
