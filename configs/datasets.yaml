@@ -85,3 +85,25 @@ datasets:
     hf_name: PKU-Alignment/BeaverTails
     kind: beavertails
     enabled: true
+
+  # ---------------- weak-label boosters ----------------
+  # These three target dangerous_information / self_harm / illegal_activity,
+  # the three classes that are sparse in the base stack.
+
+  - name: nvidia_aegis
+    loader: hf
+    hf_name: nvidia/Aegis-AI-Content-Safety-Dataset-1.0
+    kind: aegis
+    enabled: true
+
+  - name: do_not_answer
+    loader: hf
+    hf_name: LibrAI/do-not-answer
+    kind: do_not_answer
+    enabled: true
+
+  - name: sorry_bench
+    loader: hf
+    hf_name: sorry-bench/sorry-bench-202406
+    kind: sorry_bench
+    enabled: true

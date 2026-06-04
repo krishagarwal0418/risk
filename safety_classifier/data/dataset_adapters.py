@@ -238,6 +238,165 @@ def adapt_beavertails(rows: Iterable[dict], source: str) -> Iterator[UnifiedReco
         yield _rec(text, labels, source)
 
 
+def adapt_aegis(rows: Iterable[dict], source: str) -> Iterator[UnifiedRecord]:
+    """nvidia/Aegis-AI-Content-Safety-Dataset-1.0.
+
+    Schema: ``text_type``, ``text`` (the prompt), ``labels_0`` / ``labels_1`` (annotator
+    labels as strings like "Safe", "Needs Caution", "Needs Intervention", "Sensitive").
+    ``aegis_label`` (if present) is the adjudicated label string such as
+    "Violence", "Sexual", "Suicide and Self Harm", "Weapons / Arms", etc.
+    We use ``aegis_label`` when present, else majority of annotator labels.
+    """
+    _label_map = {
+        "safe": C.SAFE,
+        "needs caution": C.SAFE,          # borderline but not a clear risk label
+        "sensitive": C.SAFE,
+        "needs intervention": C.UNKNOWN,   # will be overridden by aegis_label below
+        # Canonical aegis_label strings -> external labels passed to label_mapper.
+        "violence": "violence",
+        "sexual": "sexual",
+        "suicide and self harm": "self_harm",
+        "weapons / arms": "dangerous_information",
+        "hate / identity hate": "hate",
+        "harassment": "harassment",
+        "illegal activity": "illegal_activity",
+        "controlled / regulated substances": "dangerous_information",
+        "cyberattack": "dangerous_information",
+        "profanity": "toxicity",
+        "needs caution / sensitive topics": C.SAFE,
+        "criminal planning": "illegal_activity",
+        "child sexual abuse material": "sexual",
+    }
+    for row in rows:
+        text = _first_text(row)
+        if not text:
+            continue
+        raw = str(row.get("aegis_label", "") or "").strip().lower()
+        if raw and raw in _label_map:
+            mapped = _label_map[raw]
+            labels = [mapped] if mapped else [C.UNKNOWN]
+        else:
+            # Fall back to annotator vote: any "needs intervention" or known harm label.
+            votes = [
+                str(row.get(f"labels_{i}", "") or "").strip().lower()
+                for i in range(4)
+            ]
+            labels = list({
+                _label_map.get(v, C.UNKNOWN)
+                for v in votes if v and v not in ("", "safe", "needs caution", "sensitive")
+            }) or [C.SAFE]
+        yield _rec(text, labels, source)
+
+
+def adapt_do_not_answer(rows: Iterable[dict], source: str) -> Iterator[UnifiedRecord]:
+    """LibrAI/do-not-answer.
+
+    Schema: ``question`` (the prompt), ``types_of_harm`` (free-text category),
+    ``specific_harms`` (sub-category). We map the harm category string.
+    """
+    _cat_map = {
+        "information hazards": "dangerous_information",
+        "malicious uses": "illegal_activity",
+        "discrimination, stereotype, injustice": "hate",
+        "human trafficking": "illegal_activity",
+        "financial crime": "illegal_activity",
+        "privacy violation": "illegal_activity",
+        "mental health or self-harm": "self_harm",
+        "self-harm": "self_harm",
+        "violence": "violence",
+        "hate speech": "hate",
+        "adult content": "sexual",
+        "terrorism": "illegal_activity",
+        "weapons": "dangerous_information",
+    }
+    for row in rows:
+        text = row.get("question") or _first_text(row)
+        if not text:
+            continue
+        harm = str(row.get("types_of_harm", "") or "").strip().lower()
+        label = next(
+            (v for k, v in _cat_map.items() if k in harm),
+            None,
+        )
+        if label:
+            yield _rec(text, [label], source)
+        else:
+            # Rows without a mapped harm type are benign refusal-test examples.
+            yield _rec(text, [C.SAFE], source)
+
+
+def adapt_sorry_bench(rows: Iterable[dict], source: str) -> Iterator[UnifiedRecord]:
+    """sorry-bench/sorry-bench-202406.
+
+    Schema: ``prompt``, ``category`` (int 1-45 mapping to harm sub-categories),
+    ``category_original`` or ``category_name`` (string label if present).
+    All SORRY-Bench prompts are harmful by design — we map the category.
+    """
+    # Category ID ranges → external label (based on published taxonomy).
+    # 1-8:  weapons/CBRN/cybercrime → dangerous_information
+    # 9-12: fraud/illegal → illegal_activity
+    # 13-16: self harm / suicide → self_harm
+    # 17-20: adult/sexual → sexual
+    # 21-24: hate/discrimination → hate
+    # 25-28: violence/threats → violence
+    # 29+:   misc harmful → unknown
+    _name_map = {
+        "chemical": "dangerous_information",
+        "biological": "dangerous_information",
+        "radiological": "dangerous_information",
+        "nuclear": "dangerous_information",
+        "cybercrime": "dangerous_information",
+        "weapon": "dangerous_information",
+        "illegal": "illegal_activity",
+        "fraud": "illegal_activity",
+        "drug": "dangerous_information",
+        "suicide": "self_harm",
+        "self-harm": "self_harm",
+        "self harm": "self_harm",
+        "eating disorder": "self_harm",
+        "sexual": "sexual",
+        "adult": "sexual",
+        "pornograph": "sexual",
+        "hate": "hate",
+        "discriminat": "hate",
+        "harassment": "harassment",
+        "stalk": "harassment",
+        "violence": "violence",
+        "threat": "violence",
+        "murder": "violence",
+        "human traffick": "illegal_activity",
+    }
+    for row in rows:
+        text = row.get("prompt") or _first_text(row)
+        if not text:
+            continue
+        cat_name = str(
+            row.get("category_original") or row.get("category_name") or ""
+        ).strip().lower()
+        label = next((v for k, v in _name_map.items() if k in cat_name), None)
+        if label is None:
+            # Fall back to numeric range.
+            try:
+                cat_id = int(row.get("category") or 0)
+            except (ValueError, TypeError):
+                cat_id = 0
+            if 1 <= cat_id <= 8:
+                label = "dangerous_information"
+            elif 9 <= cat_id <= 12:
+                label = "illegal_activity"
+            elif 13 <= cat_id <= 16:
+                label = "self_harm"
+            elif 17 <= cat_id <= 20:
+                label = "sexual"
+            elif 21 <= cat_id <= 24:
+                label = "hate"
+            elif 25 <= cat_id <= 28:
+                label = "violence"
+            else:
+                label = C.UNKNOWN
+        yield _rec(text, [label], source)
+
+
 def adapt_generic(rows: Iterable[dict], source: str) -> Iterator[UnifiedRecord]:
     """Generic adapter for local CSV/JSONL with ``text`` and ``labels`` columns."""
     for row in rows:
@@ -257,6 +416,9 @@ ADAPTERS: dict[str, Adapter] = {
     "prompt_injection": adapt_prompt_injection,
     "jailbreak": adapt_jailbreak,
     "salad": adapt_salad,
+    "aegis": adapt_aegis,
+    "do_not_answer": adapt_do_not_answer,
+    "sorry_bench": adapt_sorry_bench,
     "xstest": adapt_xstest,
     "jigsaw": adapt_jigsaw,
     "toxicchat": adapt_toxicchat,
