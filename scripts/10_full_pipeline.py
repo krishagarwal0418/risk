@@ -63,6 +63,10 @@ def main() -> None:
                              "models; re-heading them for a quick fine-tune "
                              "discards their pretrained head and HURTS them. "
                              "Recommended: use them as-is, fine-tune only moderation.")
+    parser.add_argument("--skip-fallback-finetuning", action="store_true",
+                        help="Skip fine-tuning the fallback moderation model (09d). "
+                             "Combine with --skip-attack-finetuning to fine-tune "
+                             "ONLY the primary moderation model (KoalaAI).")
     parser.add_argument("--device", default="cuda", choices=["cuda", "cpu"])
     parser.add_argument("--batch-size", type=int, default=64,
                         help="Fine-tuning per-device batch size")
@@ -152,7 +156,7 @@ def main() -> None:
         ("09d. Fine-tune moderation (fallback)",
          [sys.executable, script("09c_finetune_moderation_fallback.py"),
           "--device", dev, "--batch-size", bs, "--epochs", ep, "--lr", "3e-5"],
-         args.skip_finetuning, None),
+         args.skip_finetuning or args.skip_fallback_finetuning, None),
 
         ("05c. Re-evaluate fine-tuned transformers",
          [sys.executable, script("05b_eval_transformers_baseline.py"),
