@@ -61,6 +61,7 @@ class Router:
         window_token_budget: int = 128,
         long_text_threshold: int = 200,
         toxic_medium_band: tuple[float, float] = (0.30, 0.70),
+        fast_block_threshold: float = 0.90,
     ) -> None:
         self.fasttext = fasttext_router
         self.models = models or {}
@@ -70,6 +71,7 @@ class Router:
         self.window_token_budget = window_token_budget
         self.long_text_threshold = long_text_threshold
         self.toxic_medium_band = toxic_medium_band
+        self.fast_block_threshold = fast_block_threshold
 
     # ------------------------------------------------------------------ #
     def _heuristic_attack(self, detection_text: str) -> bool:
@@ -98,15 +100,28 @@ class Router:
                 add("toxic", "full_scan enabled -> running toxic fallback")
             return to_run, reasons
 
+        # Fast-block path: attack head is reliable (precision@1=0.907). When FastText
+        # is very confident on jailbreak or prompt_injection, the transformer would
+        # confirm it anyway — skip it and let the merged FastText score trigger the
+        # block decision. Abuse/high_risk heads are NOT fast-blocked (precision@1=0.42).
+        ft_jb = ft_scores.get(C.JAILBREAK, 0.0)
+        ft_pi = ft_scores.get(C.PROMPT_INJECTION, 0.0)
+        if ft_jb >= self.fast_block_threshold or ft_pi >= self.fast_block_threshold:
+            reasons.append(
+                f"FastText attack score {max(ft_jb, ft_pi):.3f} >= "
+                f"fast_block_threshold {self.fast_block_threshold} -> skipping transformer"
+            )
+            return [], reasons  # no transformer needed; FastText score drives the decision
+
         # Prompt injection routing.
-        if ft_scores.get(C.PROMPT_INJECTION, 0.0) >= self.thresholds.route(C.PROMPT_INJECTION):
+        if ft_pi >= self.thresholds.route(C.PROMPT_INJECTION):
             add("prompt_injection", "FastText attack head routed to prompt injection detector")
         if self._heuristic_attack(detection_text):
             add("prompt_injection", "Attack heuristic routed to prompt injection detector")
             add("jailbreak", "Attack heuristic routed to jailbreak detector")
 
         # Jailbreak routing.
-        if ft_scores.get(C.JAILBREAK, 0.0) >= self.thresholds.route(C.JAILBREAK):
+        if ft_jb >= self.thresholds.route(C.JAILBREAK):
             add("jailbreak", "FastText attack head routed to jailbreak detector")
 
         # Moderation routing: any abuse/high-risk label over its route threshold.
