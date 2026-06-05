@@ -111,7 +111,12 @@ def finetune(
     batch_size: int = 16,
     lr: float = 2e-5,
     val_limit: int = 4000,
+    max_device_batch: int = 32,
 ) -> dict[str, Any]:
+    import os as _os
+    # Reduce CUDA fragmentation OOMs (the allocator can reuse freed blocks).
+    _os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
     import numpy as np
     import torch
     from torch import nn
@@ -180,11 +185,20 @@ def finetune(
             return (loss, outputs) if return_outputs else loss
 
     use_cuda = torch.cuda.is_available()
+    # Cap the per-device batch so memory-heavy models (DeBERTa-v3) fit on a T4,
+    # and use gradient accumulation to preserve the requested *effective* batch.
+    # e.g. requested 320 -> per_device 32 x accum 10. Memory is bounded by the
+    # per-device batch; the optimizer still sees the full effective batch.
+    per_device = min(batch_size, max_device_batch)
+    grad_accum = max(1, round(batch_size / per_device))
+    print(f"[finetune] per_device_batch={per_device} x grad_accum={grad_accum} "
+          f"= effective {per_device * grad_accum}")
     args = TrainingArguments(
         output_dir=output_dir,
         num_train_epochs=epochs,
-        per_device_train_batch_size=batch_size,
-        per_device_eval_batch_size=batch_size,
+        per_device_train_batch_size=per_device,
+        per_device_eval_batch_size=per_device,
+        gradient_accumulation_steps=grad_accum,
         learning_rate=lr,
         # Mixed precision on GPU: ~2x faster on a T4 with negligible quality impact.
         fp16=use_cuda,
