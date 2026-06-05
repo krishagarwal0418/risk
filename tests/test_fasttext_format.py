@@ -77,3 +77,24 @@ def test_label_cap_for_prefers_head_specific_env(monkeypatch):
     assert _label_cap_for("train", "attack") == 22000
     assert _label_cap_for("train", "high_risk") == 3000
     assert _label_cap_for("val", "high_risk") == 375
+
+
+def test_label_cap_defaults_when_no_env(monkeypatch):
+    # With no env overrides, the baked-in per-head defaults apply so the pipeline
+    # produces balanced FastText files without anyone setting SC_MAX_PER_LABEL.
+    for var in ("SC_MAX_PER_LABEL", "SC_MAX_PER_LABEL_ATTACK",
+                "SC_MAX_PER_LABEL_ABUSE", "SC_MAX_PER_LABEL_HIGH_RISK",
+                "SC_MAX_SAFE_PER_HEAD"):
+        monkeypatch.delenv(var, raising=False)
+
+    assert _label_cap_for("train", "attack") == 25000
+    assert _label_cap_for("train", "abuse") == 25000
+    assert _label_cap_for("train", "high_risk") == 3000  # tiny risk classes
+    assert _label_cap_for("val", "attack") == 25000 // 8
+
+
+def test_label_cap_explicit_opt_out(monkeypatch):
+    # Negative value explicitly disables capping (returns 0 = no cap).
+    monkeypatch.setenv("SC_MAX_PER_LABEL", "-1")
+    assert _label_cap_for("train", "attack") == 0
+    assert _label_cap_for("train", "high_risk") == 0

@@ -32,23 +32,25 @@ After completion:
 # Download 12 safety datasets (2.6GB total)
 python scripts/01_download_datasets.py
 
-# Build train/val/test splits + FastText files
-SC_MAX_PER_LABEL=22000 SC_MAX_PER_LABEL_HIGH_RISK=3000 \
-  python scripts/02_prepare_fasttext_data.py
+# Build train/val/test splits + balanced FastText files.
+# Per-label caps are now applied AUTOMATICALLY (attack/abuse=25k, high_risk=3k).
+# No environment variables needed — override only if you want to:
+#   SC_MAX_PER_LABEL=22000 SC_MAX_PER_LABEL_HIGH_RISK=3000 python scripts/02_...
+python scripts/02_prepare_fasttext_data.py
 ```
 
 Expected output:
-- 701k unique examples across 12 labels
+- ~700k unique examples across 12 labels
 - Train/val/test split (80/10/10)
-- FastText training files per head
+- Balanced FastText training files per head (safe capped so it can't dominate)
 
 ---
 
 ### 2. FastText Training & Evaluation
 ```bash
 # Train 3-head router (attack, abuse, high_risk)
-SC_MAX_PER_LABEL=22000 SC_MAX_PER_LABEL_HIGH_RISK=3000 \
-  python scripts/03_train_fasttext_heads.py
+# Quality defaults: wordNgrams=3, dim=200, epoch=35 (override via flags)
+python scripts/03_train_fasttext_heads.py
 
 # Evaluate .bin vs .ftz (quantized) performance
 python scripts/04_eval_fasttext_heads.py
@@ -230,16 +232,27 @@ After fine-tuning oxyapi on 99k toxicity + 106k hate examples:
 
 ## Environment Variables
 
+All of these are **optional** — the pipeline ships with correct defaults baked in.
+
 ```bash
-# Data preparation
-SC_MAX_PER_LABEL=22000         # Cap each label to 22k examples per head
-SC_MAX_PER_LABEL_HIGH_RISK=3000 # Override for high_risk head (sparse data)
+# Data preparation (FastText caps) — defaults: attack/abuse=25k, high_risk=3k.
+# Only set these to override the built-in per-head defaults. Use -1 to disable.
+SC_MAX_PER_LABEL=25000          # global per-label cap
+SC_MAX_PER_LABEL_HIGH_RISK=3000 # high_risk head (sparse risk classes)
 
 # Inference
-SAFETY_CLASSIFIER_DEVICE=cuda   # cuda | cpu
+SAFETY_CLASSIFIER_DEVICE=cuda     # cuda | cpu
 SAFETY_CLASSIFIER_BACKEND=pytorch # pytorch | onnx
 SAFETY_CLASSIFIER_FAST_BLOCK=0.90 # Skip transformer if FastText score >= this
 ```
+
+### Fine-tuning data balance
+The fine-tuning set (`data/finetuning_train.jsonl`) is built by
+`scripts/09_validate_finetuning_data.py`, which **keeps every risk example** and
+**down-samples `safe` to `--safe-cap` (default 60k)**. Without this, fine-tuning
+on the raw 73%-safe distribution teaches the models to predict "safe". Residual
+imbalance across risk labels is corrected by sqrt-inverse-frequency class weights
+in the trainer (rare labels like `self_harm` get up to ~5x the weight of common ones).
 
 ---
 

@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
-"""Full end-to-end pipeline: data → FastText → fine-tune transformers → benchmark.
+"""Full end-to-end pipeline: data -> FastText -> fine-tune transformers -> benchmark.
 
-Skips INT8 quantization (FP32 ONNX is sufficient). With 256 batch size, completes
-in ~2-3 hours on a T4 GPU (most time is data download + FastText training).
+Self-contained: sensible FastText caps and a balanced fine-tuning set are produced
+automatically — no environment variables required. INT8 quantization is skipped
+(FP32 ONNX is used; INT8 had unacceptable logit drift on the moderation models).
 
 Usage:
-    python scripts/10_full_pipeline.py [--skip-download] [--skip-training] [--skip-finetuning]
+    python scripts/10_full_pipeline.py
+    python scripts/10_full_pipeline.py --batch-size 64 --epochs 2
+    python scripts/10_full_pipeline.py --skip-download --skip-training
 """
 
 from __future__ import annotations
 
 import argparse
-import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -21,10 +24,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from safety_classifier.config import repo_root
 
 
-def run_stage(name: str, cmd: list[str], skip: bool = False) -> bool:
-    """Run a pipeline stage and report results."""
+def run_stage(name: str, cmd: list[str], skip: bool = False,
+              env: dict | None = None) -> bool:
+    """Run a pipeline stage, streaming its output live. Returns success."""
     if skip:
-        print(f"⊘ SKIPPED: {name}")
+        print(f"\n⊘ SKIPPED: {name}")
         return True
 
     print()
@@ -32,12 +36,13 @@ def run_stage(name: str, cmd: list[str], skip: bool = False) -> bool:
     print(f"STAGE: {name}")
     print("=" * 70)
     try:
-        result = subprocess.run(cmd, check=True, text=True)
+        # No capture_output: child stdout/stderr stream straight to the console,
+        # so errors are visible in the log as they happen.
+        subprocess.run(cmd, check=True, text=True, env=env)
         print(f"✓ {name} done")
         return True
     except subprocess.CalledProcessError as e:
-        print(f"✗ {name} FAILED")
-        print(e.stderr)
+        print(f"✗ {name} FAILED (exit code {e.returncode}) — see output above")
         return False
 
 
@@ -45,113 +50,123 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Full pipeline with fine-tuning, no quantization"
     )
-    parser.add_argument("--skip-download", action="store_true",
-                        help="Skip dataset download if already cached")
+    parser.add_argument("--skip-download", action="store_true")
     parser.add_argument("--skip-training", action="store_true",
-                        help="Skip FastText training if already done")
-    parser.add_argument("--skip-finetuning", action="store_true",
-                        help="Skip transformer fine-tuning")
+                        help="Skip data prep + FastText training")
+    parser.add_argument("--skip-finetuning", action="store_true")
+    parser.add_argument("--device", default="cuda", choices=["cuda", "cpu"])
     parser.add_argument("--batch-size", type=int, default=64,
-                        help="Fine-tuning batch size")
-    parser.add_argument("--epochs", type=int, default=2,
-                        help="Fine-tuning epochs")
+                        help="Fine-tuning per-device batch size")
+    parser.add_argument("--epochs", type=int, default=2)
+    parser.add_argument("--max-per-label", type=int, default=25000,
+                        help="FastText per-label cap for attack/abuse heads")
+    parser.add_argument("--max-per-label-high-risk", type=int, default=3000,
+                        help="FastText per-label cap for the high_risk head")
+    parser.add_argument("--safe-cap", type=int, default=60000,
+                        help="Max safe-only examples in the fine-tuning set")
+    parser.add_argument("--eval-batch-size", type=int, default=64)
     args = parser.parse_args()
 
     root = repo_root()
+
+    # Environment for the data-prep stage: bakes the FastText caps in so the user
+    # never has to remember to export SC_MAX_PER_LABEL.
+    prep_env = {
+        **os.environ,
+        "SC_MAX_PER_LABEL": str(args.max_per_label),
+        "SC_MAX_PER_LABEL_HIGH_RISK": str(args.max_per_label_high_risk),
+    }
+
+    def script(name: str) -> str:
+        return str(root / "scripts" / name)
+
+    bs = str(args.batch_size)
+    ep = str(args.epochs)
+    dev = args.device
+
     stages = [
-        ("01. Download datasets", [
-            sys.executable, str(root / "scripts" / "01_download_datasets.py")
-        ], args.skip_download),
+        ("01. Download datasets",
+         [sys.executable, script("01_download_datasets.py")],
+         args.skip_download, None),
 
-        ("02. Prepare FastText data", [
-            sys.executable, str(root / "scripts" / "02_prepare_fasttext_data.py")
-        ], args.skip_download or args.skip_training),
+        ("02. Prepare + balance FastText data",
+         [sys.executable, script("02_prepare_fasttext_data.py")],
+         args.skip_training, prep_env),
 
-        ("03. Train FastText heads", [
-            sys.executable, str(root / "scripts" / "03_train_fasttext_heads.py")
-        ], args.skip_training),
+        ("03. Train FastText heads",
+         [sys.executable, script("03_train_fasttext_heads.py")],
+         args.skip_training, prep_env),
 
-        ("04. Evaluate FastText heads", [
-            sys.executable, str(root / "scripts" / "04_eval_fasttext_heads.py")
-        ], args.skip_training),
+        ("04. Evaluate FastText heads",
+         [sys.executable, script("04_eval_fasttext_heads.py")],
+         args.skip_training, None),
 
-        ("04b. Calibrate FastText thresholds", [
-            sys.executable, str(root / "scripts" / "04b_calibrate_fasttext_thresholds.py")
-        ], args.skip_training),
+        ("04b. Calibrate FastText thresholds",
+         [sys.executable, script("04b_calibrate_fasttext_thresholds.py")],
+         args.skip_training, None),
 
-        ("05. Download transformers", [
-            sys.executable, str(root / "scripts" / "05_download_transformers.py")
-        ], False),
+        ("05. Download transformers",
+         [sys.executable, script("05_download_transformers.py")],
+         False, None),
 
-        ("05b. Baseline transformer eval", [
-            sys.executable, str(root / "scripts" / "05b_eval_transformers_baseline.py"),
-            "--device", "cuda", "--batch-size", "64"
-        ], False),
+        ("05b. Baseline transformer eval",
+         [sys.executable, script("05b_eval_transformers_baseline.py"),
+          "--device", dev, "--batch-size", str(args.eval_batch_size)],
+         False, None),
 
-        ("09. Validate fine-tuning data", [
-            sys.executable, str(root / "scripts" / "09_validate_finetuning_data.py"),
-            "--input", "data/processed/all_train.jsonl",
-            "--output", "data/finetuning_train.jsonl",
-            "--min-length", "10",
-            "--max-length", "512",
-            "--min-label-count", "50"
-        ], args.skip_finetuning),
+        ("09. Validate + balance fine-tuning data",
+         [sys.executable, script("09_validate_finetuning_data.py"),
+          "--input", "data/processed/all_train.jsonl",
+          "--output", "data/finetuning_train.jsonl",
+          "--safe-cap", str(args.safe_cap)],
+         args.skip_finetuning, None),
 
-        ("09a. Fine-tune prompt injection", [
-            sys.executable, str(root / "scripts" / "09a_finetune_prompt_injection.py"),
-            "--device", "cuda",
-            "--batch-size", str(args.batch_size),
-            "--epochs", str(args.epochs),
-            "--lr", "2e-5"
-        ], args.skip_finetuning),
+        ("09a. Fine-tune prompt injection",
+         [sys.executable, script("09a_finetune_prompt_injection.py"),
+          "--device", dev, "--batch-size", bs, "--epochs", ep, "--lr", "2e-5"],
+         args.skip_finetuning, None),
 
-        ("09b. Fine-tune jailbreak detector", [
-            sys.executable, str(root / "scripts" / "09b_finetune_jailbreak.py"),
-            "--device", "cuda",
-            "--batch-size", str(args.batch_size),
-            "--epochs", str(args.epochs),
-            "--lr", "2e-5"
-        ], args.skip_finetuning),
+        ("09b. Fine-tune jailbreak detector",
+         [sys.executable, script("09b_finetune_jailbreak.py"),
+          "--device", dev, "--batch-size", bs, "--epochs", ep, "--lr", "2e-5"],
+         args.skip_finetuning, None),
 
-        ("09c. Fine-tune moderation (primary)", [
-            sys.executable, str(root / "scripts" / "09_finetune_moderation.py"),
-            "--device", "cuda",
-            "--batch-size", str(args.batch_size),
-            "--epochs", str(args.epochs),
-            "--lr", "3e-5"
-        ], args.skip_finetuning),
+        ("09c. Fine-tune moderation (primary)",
+         [sys.executable, script("09_finetune_moderation.py"),
+          "--device", dev, "--batch-size", bs, "--epochs", ep, "--lr", "3e-5"],
+         args.skip_finetuning, None),
 
-        ("09d. Fine-tune moderation (fallback)", [
-            sys.executable, str(root / "scripts" / "09c_finetune_moderation_fallback.py"),
-            "--device", "cuda",
-            "--batch-size", str(args.batch_size),
-            "--epochs", str(args.epochs),
-            "--lr", "3e-5"
-        ], args.skip_finetuning),
+        ("09d. Fine-tune moderation (fallback)",
+         [sys.executable, script("09c_finetune_moderation_fallback.py"),
+          "--device", dev, "--batch-size", bs, "--epochs", ep, "--lr", "3e-5"],
+         args.skip_finetuning, None),
 
-        ("06. Export to ONNX (FP32)", [
-            sys.executable, str(root / "scripts" / "06_export_onnx.py")
-        ], False),
+        ("05c. Re-evaluate fine-tuned transformers",
+         [sys.executable, script("05b_eval_transformers_baseline.py"),
+          "--device", dev, "--batch-size", str(args.eval_batch_size)],
+         args.skip_finetuning, None),
 
-        ("07b. Validate ONNX", [
-            sys.executable, str(root / "scripts" / "07b_eval_quantized_models.py")
-        ], False),
+        ("06. Export to ONNX (FP32)",
+         [sys.executable, script("06_export_onnx.py")],
+         False, None),
 
-        ("08. Benchmark end-to-end", [
-            sys.executable, str(root / "scripts" / "08_benchmark.py"),
-            "--device", "cuda"
-        ], False),
+        ("07b. Validate ONNX",
+         [sys.executable, script("07b_eval_quantized_models.py")],
+         False, None),
 
-        ("11. Generate final report", [
-            sys.executable, str(root / "scripts" / "11_generate_final_report.py")
-        ], False),
+        ("08. Benchmark end-to-end",
+         [sys.executable, script("08_benchmark.py"), "--device", dev],
+         False, None),
+
+        ("11. Generate final report",
+         [sys.executable, script("11_generate_final_report.py")],
+         False, None),
     ]
 
-    failed = []
-    for name, cmd, skip in stages:
-        success = run_stage(name, cmd, skip)
-        if not success:
-            failed.append(name)
+    failed = None
+    for name, cmd, skip, env in stages:
+        if not run_stage(name, cmd, skip, env):
+            failed = name
             print(f"\n⚠️  Pipeline halted at {name}")
             break
 
@@ -160,12 +175,12 @@ def main() -> None:
     print("PIPELINE COMPLETE")
     print("=" * 70)
     if failed:
-        print(f"✗ Failed stages: {', '.join(failed)}")
-        print(f"\nTo resume, fix the error and re-run with appropriate --skip-* flags")
-    else:
-        print("✓ All stages passed")
-        print(f"\nReports: {root / 'reports'}")
-        print(f"Models: {root / 'models'}")
+        print(f"✗ Failed at: {failed}")
+        print("Fix the error above, then re-run with --skip-* to resume.")
+        sys.exit(1)
+    print("✓ All stages passed")
+    print(f"\nReports: {root / 'reports'}")
+    print(f"Models:  {root / 'models'}")
 
 
 if __name__ == "__main__":

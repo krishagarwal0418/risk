@@ -30,9 +30,9 @@ HEADS = ("attack", "abuse", "high_risk")
 @dataclass
 class FastTextHyperParams:
     loss: str = "ova"
-    wordNgrams: int = 2
-    dim: int = 100
-    epoch: int = 25
+    wordNgrams: int = 3   # capture multi-word attack phrases
+    dim: int = 200        # richer embeddings (data is pre-balanced upstream)
+    epoch: int = 35
     lr: float = 0.5
     minn: int = 2
     maxn: int = 5

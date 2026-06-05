@@ -71,6 +71,14 @@ def build_dataset(rows: list[dict], label_list: list[str]):
 
 
 def compute_class_weights(rows: list[dict], label_list: list[str]) -> list[float]:
+    """Positive-class weights for BCEWithLogitsLoss (one entry per label).
+
+    Uses sqrt-inverse-frequency: gentler than raw inverse frequency (which would
+    assign a 400x weight to a label that is 400x rarer and destabilise training),
+    but still gives genuinely rare labels — self_harm, dangerous_information — a
+    meaningful boost. The data is pre-balanced upstream (safe down-sampled), so
+    these weights only correct the residual imbalance across risk labels.
+    """
     import numpy as np
 
     counts = np.zeros(len(label_list))
@@ -79,9 +87,11 @@ def compute_class_weights(rows: list[dict], label_list: list[str]) -> list[float
             if lab in r.get("labels", []):
                 counts[i] += 1
     total = max(len(rows), 1)
-    # Inverse frequency, clamped.
-    weights = total / (counts + 1.0)
-    weights = np.clip(weights / weights.mean(), 0.2, 5.0)
+    # sqrt-inverse frequency, normalised to mean 1, clamped to a wide band so a
+    # label seen ~1000x in 200k rows still gets a strong (but bounded) weight.
+    weights = np.sqrt(total / (counts + 1.0))
+    weights = weights / weights.mean()
+    weights = np.clip(weights, 0.5, 20.0)
     return weights.tolist()
 
 

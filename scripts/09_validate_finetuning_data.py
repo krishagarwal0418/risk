@@ -1,174 +1,188 @@
 #!/usr/bin/env python3
-"""Validate and prepare fine-tuning data: dedup, balance, filter low-quality.
+"""Build a balanced, quality-filtered fine-tuning dataset from processed splits.
+
+The processed training set is ~73% safe (409k safe vs e.g. 965 self_harm). Fine-
+tuning a transformer on that distribution teaches it to predict "safe" for almost
+everything. This script fixes that by:
+
+  1. Quality-filtering (length bounds, malformed/empty labels, conflicting labels).
+  2. Deduplicating by text hash (set-based, O(n)).
+  3. Keeping ALL risk examples (they are rare and valuable).
+  4. Down-sampling the dominant "safe" class to a sane cap so it does not swamp
+     the risk signal — class weights in the trainer handle the residual imbalance.
+
+Output: data/finetuning_train.jsonl (used by every 09x fine-tune script).
 
 Usage:
-    python scripts/09_validate_finetuning_data.py
-        --input data/processed/all_train.jsonl
-        --output data/finetuning_train.jsonl
-        --min-length 10
-        --max-length 512
+    python scripts/09_validate_finetuning_data.py \
+        --input data/processed/all_train.jsonl \
+        --output data/finetuning_train.jsonl \
+        --safe-cap 60000
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import random
 import sys
-from collections import Counter, defaultdict
+from collections import Counter
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from safety_classifier import constants as C
 
+_RISK = set(C.RISK_LABELS)
+
+
+def _quality_ok(text: str, labels: list[str], min_len: int, max_len: int) -> str | None:
+    """Return a rejection reason, or None if the record passes all checks."""
+    if not text:
+        return "empty_text"
+    if len(text) < min_len:
+        return "too_short"
+    if len(text) > max_len:
+        return "too_long"
+    if not labels:
+        return "no_labels"
+    if labels == [C.UNKNOWN]:
+        return "only_unknown"
+    has_safe = C.SAFE in labels
+    has_risk = any(lab in _RISK for lab in labels)
+    if has_safe and has_risk:
+        return "mixed_safe_risk"
+    return None
+
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Validate & prepare fine-tuning data")
+    parser = argparse.ArgumentParser(description="Build balanced fine-tuning data")
     parser.add_argument("--input", default="data/processed/all_train.jsonl")
     parser.add_argument("--output", default="data/finetuning_train.jsonl")
-    parser.add_argument("--min-length", type=int, default=10, help="Min text length")
-    parser.add_argument("--max-length", type=int, default=512, help="Max text length")
+    parser.add_argument("--min-length", type=int, default=10)
+    parser.add_argument("--max-length", type=int, default=2000)
     parser.add_argument("--min-label-count", type=int, default=50,
-                        help="Minimum examples per label for fine-tuning")
+                        help="Warn if a label has fewer than this many examples")
+    parser.add_argument("--safe-cap", type=int, default=60000,
+                        help="Max number of safe-only examples to keep (0 = keep all)")
+    parser.add_argument("--seed", type=int, default=13)
     args = parser.parse_args()
 
     in_path = Path(args.input)
     out_path = Path(args.output)
-
     if not in_path.exists():
         print(f"✗ Input file not found: {in_path}")
-        return
+        sys.exit(1)
 
     print("=" * 70)
-    print("Fine-tuning Data Validation & Preparation")
+    print("Fine-tuning Data: Validate + Balance")
     print("=" * 70)
-    print(f"Input: {in_path}")
-    print(f"Output: {out_path}")
+    print(f"Input:    {in_path}")
+    print(f"Output:   {out_path}")
+    print(f"Safe cap: {args.safe_cap or 'none'}")
     print()
 
-    # Load all records
-    records = []
-    with in_path.open() as f:
-        for i, line in enumerate(f):
+    rng = random.Random(args.seed)
+    issues: Counter = Counter()
+    seen_hashes: set[str] = set()
+    risk_records: list[dict] = []
+    safe_records: list[dict] = []
+    total = 0
+
+    with in_path.open(encoding="utf-8") as f:
+        for line in f:
             if not line.strip():
                 continue
+            total += 1
             try:
-                records.append(json.loads(line))
+                rec = json.loads(line)
             except json.JSONDecodeError:
-                print(f"  ⚠️  Skipped malformed JSON at line {i+1}")
+                issues["malformed_json"] += 1
                 continue
 
-    print(f"Loaded {len(records)} records")
-    print()
+            text = (rec.get("text") or "").strip()
+            labels = rec.get("labels", [])
 
-    # Quality checks & filtering
-    filtered = []
-    issues = defaultdict(int)
+            reason = _quality_ok(text, labels, args.min_length, args.max_length)
+            if reason:
+                issues[reason] += 1
+                continue
 
-    for i, rec in enumerate(records):
-        text = rec.get("text", "").strip()
-        labels = rec.get("labels", [])
-
-        # Check 1: Empty text
-        if not text:
-            issues["empty_text"] += 1
-            continue
-
-        # Check 2: Text length
-        if len(text) < args.min_length:
-            issues["too_short"] += 1
-            continue
-        if len(text) > args.max_length:
-            issues["too_long"] += 1
-            continue
-
-        # Check 3: Empty labels
-        if not labels:
-            issues["no_labels"] += 1
-            continue
-
-        # Check 4: Only "unknown" label (low signal)
-        if labels == [C.UNKNOWN]:
-            issues["only_unknown"] += 1
-            continue
-
-        # Check 5: Conflicting labels (safe + risk)
-        has_safe = C.SAFE in labels
-        has_risk = any(lab in C.RISK_LABELS for lab in labels)
-        if has_safe and has_risk:
-            # Mixed label = low confidence, skip
-            issues["mixed_safe_risk"] += 1
-            continue
-
-        # Check 6: Duplicate text hash
-        if "hash" in rec:
-            # Dedup by hash
-            if any(r.get("hash") == rec.get("hash") for r in filtered):
+            # O(1) dedup by hash (fall back to text if hash missing).
+            key = rec.get("hash") or text
+            if key in seen_hashes:
                 issues["duplicate"] += 1
                 continue
+            seen_hashes.add(key)
 
-        filtered.append(rec)
+            if any(lab in _RISK for lab in labels):
+                risk_records.append(rec)
+            else:
+                safe_records.append(rec)
 
-    print("Quality Checks:")
-    for issue, count in sorted(issues.items(), key=lambda x: -x[1]):
-        pct = 100 * count / len(records)
-        print(f"  {issue:<25} {count:>6} ({pct:>5.1f}%)")
+    print(f"Loaded {total} records")
     print()
-    print(f"Retained: {len(filtered)} records ({100*len(filtered)/len(records):.1f}%)")
+    print("Filtered out:")
+    for reason, count in issues.most_common():
+        print(f"  {reason:<22} {count:>7} ({100 * count / max(total, 1):>5.1f}%)")
     print()
 
-    # Label distribution
-    label_counts = Counter()
-    for rec in filtered:
+    # Balance: keep all risk, down-sample safe.
+    kept_safe = safe_records
+    if args.safe_cap and len(safe_records) > args.safe_cap:
+        rng.shuffle(safe_records)
+        kept_safe = safe_records[: args.safe_cap]
+        print(f"Down-sampled safe: {len(safe_records)} -> {len(kept_safe)}")
+
+    final = risk_records + kept_safe
+    rng.shuffle(final)
+
+    print(f"Risk examples kept: {len(risk_records)}")
+    print(f"Safe examples kept: {len(kept_safe)}")
+    print(f"Total fine-tuning examples: {len(final)}")
+    print()
+
+    # Per-label distribution of the final set.
+    label_counts: Counter = Counter()
+    for rec in final:
         for lab in rec.get("labels", []):
             label_counts[lab] += 1
 
-    print("Label Distribution (fine-tuning set):")
-    warnings = []
+    print("Final label distribution:")
+    warnings: list[str] = []
     for lab, count in label_counts.most_common():
-        status = "✓" if count >= args.min_label_count else "✗"
-        print(f"  {status} {lab:<30} {count:>6}")
-        if count < args.min_label_count:
-            warnings.append(f"{lab} has only {count} examples (need {args.min_label_count})")
+        flag = "✓" if count >= args.min_label_count else "✗"
+        print(f"  {flag} {lab:<24} {count:>7}")
+        if lab in _RISK and count < args.min_label_count:
+            warnings.append(f"{lab}={count} (<{args.min_label_count})")
     print()
 
-    if warnings:
-        print("⚠️  Warnings:")
-        for w in warnings:
-            print(f"  - {w}")
-        print()
-
-    # Task-specific validation
-    print("Task Coverage:")
-
-    attack_labels = {C.PROMPT_INJECTION, C.JAILBREAK}
-    attack_count = sum(1 for r in filtered
-                       if any(lab in attack_labels for lab in r.get("labels", [])))
-    print(f"  Attack (PI+JB): {attack_count} examples")
-
-    moderation_labels = {C.TOXICITY, C.HATE, C.HARASSMENT, C.SEXUAL,
-                         C.VIOLENCE, C.SELF_HARM, C.DANGEROUS_INFORMATION,
-                         C.ILLEGAL_ACTIVITY}
-    mod_count = sum(1 for r in filtered
-                    if any(lab in moderation_labels for lab in r.get("labels", [])))
-    print(f"  Moderation:    {mod_count} examples")
+    # Task coverage sanity.
+    attack_pos = sum(
+        1 for r in final
+        if any(l in (C.PROMPT_INJECTION, C.JAILBREAK) for l in r.get("labels", []))
+    )
+    mod_pos = sum(
+        1 for r in final
+        if any(l in (C.TOXICITY, C.HATE, C.HARASSMENT, C.SEXUAL, C.VIOLENCE,
+                     C.SELF_HARM, C.DANGEROUS_INFORMATION, C.ILLEGAL_ACTIVITY)
+               for l in r.get("labels", []))
+    )
+    print(f"Attack positives (PI+JB): {attack_pos}")
+    print(f"Moderation positives:     {mod_pos}")
     print()
 
-    # Write output
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    with out_path.open("w") as f:
-        for rec in filtered:
+    with out_path.open("w", encoding="utf-8") as f:
+        for rec in final:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
-    print(f"✓ Wrote {len(filtered)} records to {out_path}")
-    print()
-
-    # Summary
+    print(f"✓ Wrote {len(final)} records to {out_path}")
     print("=" * 70)
     if warnings:
-        print("Status: ⚠️  WARN (some labels sparse, may impact fine-tuning)")
+        print("Status: ⚠️  WARN — sparse risk labels: " + ", ".join(warnings))
     else:
-        print("Status: ✓ PASS (data ready for fine-tuning)")
+        print("Status: ✓ PASS — balanced and ready for fine-tuning")
     print("=" * 70)
 
 

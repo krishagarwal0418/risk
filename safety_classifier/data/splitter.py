@@ -180,30 +180,56 @@ def _head_labels_for(
     return []
 
 
+# Head-specific default caps applied when no env override is set. These make the
+# pipeline produce balanced FastText files out of the box — no env vars required.
+# Rationale:
+#   - attack / abuse: 25k per label keeps safe from drowning out attack/abuse signal
+#     while retaining enough data for a strong model.
+#   - high_risk: 3k, because its risk classes are tiny (self_harm=965,
+#     dangerous_information=2638); a large safe pool would swamp them.
+_DEFAULT_HEAD_CAPS: dict[str, int] = {
+    "attack": 25000,
+    "abuse": 25000,
+    "high_risk": 3000,
+}
+
+
 def _label_cap_for(split: str, head: str | None = None) -> int:
-    """Per-label cap on examples per head (0 = no cap).
+    """Per-label cap on examples per head.
 
-    ``SC_MAX_PER_LABEL_<HEAD>`` caps one head, while ``SC_MAX_PER_LABEL`` remains
-    the global fallback. Val/test get 1/8 to preserve the 80/10/10 ratio.
+    Resolution order (first match wins):
+      1. ``SC_MAX_PER_LABEL_<HEAD>``  (e.g. SC_MAX_PER_LABEL_HIGH_RISK)
+      2. ``SC_MAX_PER_LABEL``         (global override across all heads)
+      3. ``SC_MAX_SAFE_PER_HEAD``     (legacy, backwards-compat)
+      4. ``_DEFAULT_HEAD_CAPS[head]`` (sensible per-head default — the common path)
 
-    Recommended values:
-      - attack head:    SC_MAX_PER_LABEL_ATTACK=22000
-      - abuse head:     SC_MAX_PER_LABEL_ABUSE=22000
-      - high_risk head: SC_MAX_PER_LABEL_HIGH_RISK=3000..5000
-
-    ``SC_MAX_SAFE_PER_HEAD`` is kept for backwards-compat but SC_MAX_PER_LABEL
-    takes precedence when set.
+    Set any env var to ``-1`` to explicitly disable capping for that scope.
+    Val/test get 1/8 of the train cap to preserve the ~80/10/10 ratio.
     """
     import os
 
-    head_key = f"SC_MAX_PER_LABEL_{head.upper()}" if head else ""
-    n = int(os.environ.get(head_key, "0") or "0") if head_key else 0
-    if n <= 0:
-        n = int(os.environ.get("SC_MAX_PER_LABEL", "0") or "0")
-    if n <= 0:
-        # Fall back to legacy safe-only cap if set.
-        n = int(os.environ.get("SC_MAX_SAFE_PER_HEAD", "0") or "0")
-    if n <= 0:
+    def _env(key: str) -> int | None:
+        raw = os.environ.get(key)
+        if raw is None or raw.strip() == "":
+            return None
+        try:
+            return int(raw)
+        except ValueError:
+            return None
+
+    head_key = f"SC_MAX_PER_LABEL_{head.upper()}" if head else None
+    candidates = [
+        _env(head_key) if head_key else None,
+        _env("SC_MAX_PER_LABEL"),
+        _env("SC_MAX_SAFE_PER_HEAD"),
+    ]
+    n: int | None = next((c for c in candidates if c is not None), None)
+    if n is None:
+        # No override anywhere -> use the baked-in per-head default.
+        n = _DEFAULT_HEAD_CAPS.get(head or "", 25000)
+    if n < 0:
+        return 0  # explicit opt-out: no cap
+    if n == 0:
         return 0
     return n if split == "train" else max(n // 8, 1)
 
