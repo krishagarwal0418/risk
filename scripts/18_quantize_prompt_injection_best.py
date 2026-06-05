@@ -36,6 +36,13 @@ DEFAULT_DATA = "data/prompt_injection_best/test.jsonl"
 
 THRESHOLDS = [round(0.05 * i, 2) for i in range(1, 20)]
 
+WEIGHT_SEARCH_ROOTS = (
+    "models/fine/prompt",
+    "models/finetuned/prompt_injection_best",
+    "models/finetuned/prompt_injection",
+    "models",
+)
+
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -53,6 +60,77 @@ def _sample_rows(rows: list[dict[str, Any]], limit: int, seed: int) -> list[dict
     out = pos[:half] + neg[: limit - half]
     rng.shuffle(out)
     return out
+
+
+def _is_deberta_prompt_weights(path: Path) -> bool:
+    if not path.exists() or path.suffix != ".safetensors":
+        return False
+    try:
+        from safetensors import safe_open
+
+        with safe_open(str(path), framework="pt", device="cpu") as fh:
+            keys = set(fh.keys())
+            if "deberta.embeddings.word_embeddings.weight" not in keys:
+                return False
+            if "classifier.weight" not in keys:
+                return False
+            return tuple(fh.get_tensor("classifier.weight").shape) == (2, 768)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def discover_weight_candidates(root: Path) -> list[Path]:
+    candidates: list[Path] = []
+    for rel in WEIGHT_SEARCH_ROOTS:
+        base = root / rel
+        if not base.exists():
+            continue
+        for path in base.rglob("*.safetensors"):
+            if _is_deberta_prompt_weights(path):
+                candidates.append(path)
+    # Prefer explicit "best" files, then larger/newer paths.
+    candidates = sorted(
+        set(candidates),
+        key=lambda p: (
+            "best" not in p.name.lower(),
+            -(p.stat().st_size if p.exists() else 0),
+            str(p),
+        ),
+    )
+    return candidates
+
+
+def resolve_weights_path(root: Path, requested: str) -> Path:
+    if requested == "auto":
+        candidates = discover_weight_candidates(root)
+        if candidates:
+            print("[quant] auto-selected weights:", candidates[0])
+            if len(candidates) > 1:
+                print("[quant] other DeBERTa weight candidates:")
+                for cand in candidates[1:8]:
+                    print(f"  - {cand} ({human_size(cand.stat().st_size)})")
+            return candidates[0]
+        raise FileNotFoundError(
+            "Could not auto-discover DeBERTa prompt weights. Expected a "
+            "model_best.safetensors-like file under models/. Pass --weights "
+            "/path/to/model_best.safetensors."
+        )
+
+    path = Path(requested)
+    if not path.is_absolute():
+        path = root / path
+    if path.exists():
+        return path
+
+    candidates = discover_weight_candidates(root)
+    msg = [f"Weights file not found: {path}"]
+    if candidates:
+        msg.append("Detected DeBERTa prompt weight candidates:")
+        msg.extend(f"  - {cand} ({human_size(cand.stat().st_size)})" for cand in candidates[:10])
+        msg.append("Re-run with --weights auto or one of the paths above.")
+    else:
+        msg.append("No DeBERTa-shaped *.safetensors candidates found under models/.")
+    raise FileNotFoundError("\n".join(msg))
 
 
 def metrics_at(y: list[int], scores: list[float], threshold: float) -> dict[str, Any]:
@@ -289,7 +367,7 @@ def main() -> None:
     args = parser.parse_args()
 
     root = repo_root()
-    weights = root / args.weights
+    weights = resolve_weights_path(root, args.weights)
     data_path = root / args.data
     hf_dir = root / args.hf_dir
     fp32_dir = root / args.fp32_dir

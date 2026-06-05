@@ -67,3 +67,37 @@ def test_recommendation_falls_back_to_fp32_when_all_quantized_drop_too_much():
     }
 
     assert mod.choose_recommendation(results, max_f1_drop=0.002, max_pr_auc_drop=0.002) == "fp32_onnx"
+
+
+def test_auto_weight_resolution_prefers_best_file(tmp_path, monkeypatch):
+    mod = _load_script()
+    model_dir = tmp_path / "models" / "fine" / "prompt"
+    model_dir.mkdir(parents=True)
+    stale = model_dir / "model.safetensors"
+    best = model_dir / "model_best.safetensors"
+    stale.write_bytes(b"small")
+    best.write_bytes(b"larger-best")
+
+    monkeypatch.setattr(mod, "_is_deberta_prompt_weights", lambda p: p.name.endswith(".safetensors"))
+
+    assert mod.resolve_weights_path(tmp_path, "auto") == best
+
+
+def test_missing_weight_error_lists_candidates(tmp_path, monkeypatch):
+    mod = _load_script()
+    model_dir = tmp_path / "models" / "fine" / "prompt"
+    model_dir.mkdir(parents=True)
+    best = model_dir / "model_best.safetensors"
+    best.write_bytes(b"larger-best")
+    monkeypatch.setattr(mod, "_is_deberta_prompt_weights", lambda p: p == best)
+
+    try:
+        mod.resolve_weights_path(tmp_path, "missing/model_best.safetensors")
+    except FileNotFoundError as exc:
+        msg = str(exc)
+    else:
+        raise AssertionError("expected FileNotFoundError")
+
+    assert "Weights file not found" in msg
+    assert "model_best.safetensors" in msg
+    assert "--weights auto" in msg
