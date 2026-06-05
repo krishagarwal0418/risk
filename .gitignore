@@ -16,6 +16,10 @@ models/transformers/*
 models/onnx/*
 models/onnx_int8/*
 models/finetuned/*
+models/fine/*
+models/**/*.safetensors
+models/**/*.pt
+models/**/*.pth
 reports/*
 
 # keep the directory structure

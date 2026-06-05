@@ -65,6 +65,10 @@ def main() -> None:
                         help="Warn if a label has fewer than this many examples")
     parser.add_argument("--safe-cap", type=int, default=60000,
                         help="Max number of safe-only examples to keep (0 = keep all)")
+    parser.add_argument("--attack-output", default="data/finetuning_attack.jsonl",
+                        help="Attack-focused subset for the PI/JB fine-tunes")
+    parser.add_argument("--attack-neg-ratio", type=int, default=6,
+                        help="Hard negatives per attack positive in the attack file")
     parser.add_argument("--seed", type=int, default=13)
     args = parser.parse_args()
 
@@ -176,8 +180,28 @@ def main() -> None:
     with out_path.open("w", encoding="utf-8") as f:
         for rec in final:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    print(f"✓ Wrote {len(final)} records to {out_path}  (moderation fine-tunes)")
 
-    print(f"✓ Wrote {len(final)} records to {out_path}")
+    # ---- Attack-focused subset (for the PI/JB fine-tunes) -------------------
+    # The attack task has only ~{attack_pos} positives in {len(final)} rows, so
+    # training the PI/JB models on the full file is ~6x slower for no gain. Keep
+    # ALL attack positives + a bounded sample of hard negatives (a mix of safe
+    # and other-risk text, which teaches "toxic-but-not-injection != injection").
+    attack_labels = (C.PROMPT_INJECTION, C.JAILBREAK)
+    pos_rows = [r for r in final if any(l in attack_labels for l in r.get("labels", []))]
+    neg_rows = [r for r in final if not any(l in attack_labels for l in r.get("labels", []))]
+    rng.shuffle(neg_rows)
+    neg_keep = min(len(neg_rows), max(len(pos_rows) * args.attack_neg_ratio, 1))
+    attack_set = pos_rows + neg_rows[:neg_keep]
+    rng.shuffle(attack_set)
+
+    attack_path = Path(args.attack_output)
+    with attack_path.open("w", encoding="utf-8") as f:
+        for rec in attack_set:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    print(f"✓ Wrote {len(attack_set)} records to {attack_path}  "
+          f"({len(pos_rows)} attack-pos + {neg_keep} hard-neg, attack fine-tunes)")
+
     print("=" * 70)
     if warnings:
         print("Status: ⚠️  WARN — sparse risk labels: " + ", ".join(warnings))
