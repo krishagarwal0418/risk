@@ -11,13 +11,14 @@ from safety_classifier.fasttext_layer.trainer import FastTextHyperParams, train_
 
 def main() -> None:
     p = argparse.ArgumentParser(description="Train FastText safety heads")
-    # Defaults tuned for quality (data is pre-balanced upstream):
+    # Sensible defaults (data is pre-balanced upstream):
     #   wordNgrams=3 captures multi-word attack phrases ("ignore previous
-    #   instructions"); dim=200 gives richer embeddings; epoch=35 converges the
-    #   now-balanced classes. All overridable from the CLI.
-    p.add_argument("--epoch", type=int, default=35)
+    #   instructions") — the one change that clearly helps. dim=100/epoch=25 are
+    #   the standard fast settings; bumping them ~doubles train time for little
+    #   gain. All overridable from the CLI.
+    p.add_argument("--epoch", type=int, default=25)
     p.add_argument("--lr", type=float, default=0.5)
-    p.add_argument("--dim", type=int, default=200)
+    p.add_argument("--dim", type=int, default=100)
     p.add_argument("--wordNgrams", type=int, default=3)
     p.add_argument("--minn", type=int, default=2)
     p.add_argument("--maxn", type=int, default=5)
