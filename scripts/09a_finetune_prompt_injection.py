@@ -18,7 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from safety_classifier.transformers_layer.finetune import finetune
-from safety_classifier.config import repo_root
+from safety_classifier.config import repo_root, load_models_config
 
 
 def main() -> None:
@@ -45,8 +45,12 @@ def main() -> None:
     val_path = str(root / "data" / "processed" / "all_val.jsonl")
     output_dir = str(root / "models" / "finetuned" / "prompt_injection")
 
+    # Read the base model from models.yaml (source of truth) so a config swap
+    # actually changes which model gets fine-tuned.
+    model_name = load_models_config()["transformers"]["prompt_injection"]["hf_name"]
+
     print("=" * 60)
-    print("Fine-tuning fmops/distilbert-prompt-injection")
+    print(f"Fine-tuning {model_name}")
     print("=" * 60)
     print(f"Training: {train_path}")
     print(f"Validation: {val_path}")
@@ -56,7 +60,7 @@ def main() -> None:
     print()
 
     metrics = finetune(
-        model_name="fmops/distilbert-prompt-injection",
+        model_name=model_name,
         task="attack",
         train_path=train_path,
         val_path=val_path,
