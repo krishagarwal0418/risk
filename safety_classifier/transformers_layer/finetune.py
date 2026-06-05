@@ -4,6 +4,8 @@ Supports multi-label classification with class weights and early stopping for:
   * task=attack       -> labels: prompt_injection, jailbreak
   * task=moderation   -> labels: toxicity, hate, harassment, sexual, violence,
                                  self_harm, dangerous_information, illegal_activity
+  * task=koala_moderation -> Koala-supported labels only: toxicity, hate,
+                             harassment, sexual, violence, self_harm
 
 The default system uses the pretrained models; this harness exists for teams that
 want to adapt a model to their own validation data.
@@ -38,7 +40,17 @@ TASK_LABELS: dict[str, list[str]] = {
         C.DANGEROUS_INFORMATION,
         C.ILLEGAL_ACTIVITY,
     ],
+    "koala_moderation": [
+        C.TOXICITY,
+        C.HATE,
+        C.HARASSMENT,
+        C.SEXUAL,
+        C.VIOLENCE,
+        C.SELF_HARM,
+    ],
 }
+
+_METRIC_THRESHOLDS = [round(0.05 * i, 2) for i in range(1, 20)]
 
 
 def _load_jsonl(path: str) -> list[dict[str, Any]]:
@@ -113,6 +125,7 @@ def finetune(
     val_limit: int = 4000,
     max_device_batch: int = 32,
     init_weights_path: str | None = None,
+    metric_for_best_model: str = "macro_pr_auc",
 ) -> dict[str, Any]:
     import os as _os
     # Reduce CUDA fragmentation OOMs (the allocator can reuse freed blocks).
@@ -178,13 +191,32 @@ def finetune(
     val_ds = build_dataset(val_rows, label_list).map(tokenize, batched=True)
 
     def compute_metrics(eval_pred):
-        from sklearn.metrics import f1_score
+        from sklearn.metrics import average_precision_score, f1_score
 
         logits, labels = eval_pred
-        preds = (1 / (1 + np.exp(-logits))) >= 0.5
-        return {
+        probs = 1 / (1 + np.exp(-logits))
+        preds = probs >= 0.5
+        best_f1s: list[float] = []
+        pr_aucs: list[float] = []
+        out: dict[str, float] = {
             "micro_f1": f1_score(labels, preds, average="micro", zero_division=0),
             "macro_f1": f1_score(labels, preds, average="macro", zero_division=0),
+        }
+        for idx, lab in enumerate(label_list):
+            gold = labels[:, idx]
+            scores = probs[:, idx]
+            if np.sum(gold) > 0 and np.sum(gold) < len(gold):
+                pr_aucs.append(float(average_precision_score(gold, scores)))
+            best = 0.0
+            for thr in _METRIC_THRESHOLDS:
+                pred = scores >= thr
+                best = max(best, float(f1_score(gold, pred, zero_division=0)))
+            best_f1s.append(best)
+            out[f"best_f1_{lab}"] = best
+        out["macro_best_f1"] = float(np.mean(best_f1s)) if best_f1s else 0.0
+        out["macro_pr_auc"] = float(np.mean(pr_aucs)) if pr_aucs else 0.0
+        return {
+            key: round(val, 6) for key, val in out.items()
         }
 
     class WeightedTrainer(Trainer):
@@ -230,7 +262,7 @@ def finetune(
         save_steps=250,
         save_total_limit=2,
         load_best_model_at_end=True,
-        metric_for_best_model="macro_f1",
+        metric_for_best_model=metric_for_best_model,
         greater_is_better=True,
         logging_steps=50,
         report_to=[],

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Fine-tune the moderation model on processed data with aggressive batching.
+"""Fine-tune Koala moderation on the Koala-specific filtered data.
 
 Usage:
+    python scripts/17_finetune_koala_moderation_best.py --build-only
     python scripts/09_finetune_moderation.py \
         --device cuda \
         --batch-size 64 \
@@ -23,7 +24,7 @@ from safety_classifier.config import repo_root, load_models_config
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Fine-tune oxyapi moderation model on processed safety data"
+        description="Fine-tune KoalaAI moderation on supported-label safety data"
     )
     parser.add_argument("--device", default="cuda", choices=["cuda", "cpu"])
     parser.add_argument("--batch-size", type=int, default=64,
@@ -38,10 +39,13 @@ def main() -> None:
     args = parser.parse_args()
 
     root = repo_root()
-    # Use validated fine-tuning data (deduplicated, filtered for quality)
-    train_path = str(root / "data" / "finetuning_train.jsonl")
-    # Use validation set (not filtered to keep real distribution)
-    val_path = str(root / "data" / "processed" / "all_val.jsonl")
+    train_path = root / "data" / "koala_moderation" / "train.jsonl"
+    val_path = root / "data" / "koala_moderation" / "val.jsonl"
+    if not train_path.exists() or not val_path.exists():
+        raise SystemExit(
+            "Koala-specific fine-tuning data is missing. Run:\n"
+            "  python scripts/17_finetune_koala_moderation_best.py --build-only"
+        )
     output_dir = str(root / "models" / "finetuned" / "moderation")
 
     model_name = load_models_config()["transformers"]["moderation_primary"]["hf_name"]
@@ -59,14 +63,15 @@ def main() -> None:
         print(f"Warm-starting from: {args.init_weights}")
     metrics = finetune(
         model_name=model_name,
-        task="moderation",
-        train_path=train_path,
-        val_path=val_path,
+        task="koala_moderation",
+        train_path=str(train_path),
+        val_path=str(val_path),
         output_dir=output_dir,
         epochs=args.epochs,
         batch_size=args.batch_size,
         lr=args.lr,
         init_weights_path=args.init_weights,
+        metric_for_best_model="macro_pr_auc",
     )
 
     print()
