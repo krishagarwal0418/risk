@@ -8,7 +8,7 @@ fasttext:
 
 transformers:
   prompt_injection:
-    hf_name: protectai/deberta-v3-small-prompt-injection-v2
+    hf_name: fmops/distilbert-prompt-injection
     local_path: models/transformers/prompt_injection
     onnx_path: models/onnx/prompt_injection
     int8_path: models/onnx_int8/prompt_injection
@@ -20,19 +20,16 @@ transformers:
     int8_path: models/onnx_int8/jailbreak
 
   moderation_primary:
-    hf_name: ifmain/ModerationBERT-En-02
-    local_path: models/transformers/moderation_bert
-    onnx_path: models/onnx/moderation_bert
-    int8_path: models/onnx_int8/moderation_bert
-
-  moderation_fallback:
     hf_name: oxyapi/albert-moderation-001
     local_path: models/transformers/oxyapi_moderation
     onnx_path: models/onnx/oxyapi_moderation
     int8_path: models/onnx_int8/oxyapi_moderation
 
-  toxic_fallback:
-    hf_name: Intel/toxic-prompt-roberta
-    local_path: models/transformers/toxic_prompt_roberta
-    onnx_path: models/onnx/toxic_prompt_roberta
-    int8_path: models/onnx_int8/toxic_prompt_roberta
+  moderation_fallback:
+    hf_name: ifmain/ModerationBERT-En-02
+    local_path: models/transformers/moderation_bert
+    onnx_path: models/onnx/moderation_bert
+    int8_path: models/onnx_int8/moderation_bert
+
+  # toxic_fallback disabled: Intel/toxic-prompt-roberta PR-AUC=0.43 (below random)
+  # on our multi-label taxonomy. Binary TOXIC/NOT_TOXIC doesn't map to our labels.
