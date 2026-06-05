@@ -57,6 +57,12 @@ def main() -> None:
                         help="Skip ONLY the FastText train/eval/calibrate stages "
                              "(still prepares data for fine-tuning)")
     parser.add_argument("--skip-finetuning", action="store_true")
+    parser.add_argument("--skip-attack-finetuning", action="store_true",
+                        help="Skip fine-tuning the attack models (09a/09b). "
+                             "protectai + madhurjindal are strong purpose-built "
+                             "models; re-heading them for a quick fine-tune "
+                             "discards their pretrained head and HURTS them. "
+                             "Recommended: use them as-is, fine-tune only moderation.")
     parser.add_argument("--device", default="cuda", choices=["cuda", "cpu"])
     parser.add_argument("--batch-size", type=int, default=64,
                         help="Fine-tuning per-device batch size")
@@ -131,12 +137,12 @@ def main() -> None:
         ("09a. Fine-tune prompt injection",
          [sys.executable, script("09a_finetune_prompt_injection.py"),
           "--device", dev, "--batch-size", bs, "--epochs", ep, "--lr", "2e-5"],
-         args.skip_finetuning, None),
+         args.skip_finetuning or args.skip_attack_finetuning, None),
 
         ("09b. Fine-tune jailbreak detector",
          [sys.executable, script("09b_finetune_jailbreak.py"),
           "--device", dev, "--batch-size", bs, "--epochs", ep, "--lr", "2e-5"],
-         args.skip_finetuning, None),
+         args.skip_finetuning or args.skip_attack_finetuning, None),
 
         ("09c. Fine-tune moderation (primary)",
          [sys.executable, script("09_finetune_moderation.py"),
