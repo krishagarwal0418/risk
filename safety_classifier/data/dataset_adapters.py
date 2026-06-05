@@ -68,6 +68,32 @@ def adapt_prompt_injection(rows: Iterable[dict], source: str) -> Iterator[Unifie
             yield _rec(text, [str(label)], source)
 
 
+def adapt_rogue_injection(rows: Iterable[dict], source: str) -> Iterator[UnifiedRecord]:
+    """rogue-security/prompt-injections-benchmark.
+
+    Schema: ``text`` + ``label`` where label is the string ``jailbreak`` (positive)
+    or ``benign``. Despite the "jailbreak" label name, this is an *indirect prompt
+    injection* benchmark (instructions embedded mid-prompt, roleplay-framed
+    overrides). We map the positive class to ``prompt_injection`` — the dataset's
+    declared purpose — which keeps the jailbreak class pure to DAN-style data.
+    Routing uses max(prompt_injection, jailbreak), so the label choice does not
+    affect whether these get routed; it only keeps the training signal clean.
+    """
+    for row in rows:
+        text = _first_text(row)
+        if not text:
+            continue
+        label = str(row.get("label", "")).strip().lower()
+        if label in ("benign", "safe", "0", "false"):
+            yield _rec(text, [C.SAFE], source)
+        elif label in ("jailbreak", "injection", "prompt_injection", "1", "true",
+                       "malicious", "attack"):
+            yield _rec(text, [C.PROMPT_INJECTION], source)
+        else:
+            # Unknown label string: skip rather than guess.
+            continue
+
+
 def adapt_jailbreak(rows: Iterable[dict], source: str) -> Iterator[UnifiedRecord]:
     """jackhhao/jailbreak-classification, in-the-wild jailbreak prompts."""
     for row in rows:
@@ -539,6 +565,7 @@ def adapt_generic(rows: Iterable[dict], source: str) -> Iterator[UnifiedRecord]:
 
 ADAPTERS: dict[str, Adapter] = {
     "prompt_injection": adapt_prompt_injection,
+    "rogue_injection": adapt_rogue_injection,
     "jailbreak": adapt_jailbreak,
     "salad": adapt_salad,
     "aegis": adapt_aegis,

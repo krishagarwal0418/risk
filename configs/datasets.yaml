@@ -13,6 +13,18 @@ datasets:
     kind: prompt_injection
     enabled: true
 
+  # Indirect-injection benchmark (instructions embedded mid-prompt, roleplay
+  # overrides) — fills the gap where our other injection data is weak. GATED:
+  # set HF_TOKEN in the environment when running 01_download_datasets.py, and
+  # accept the terms at huggingface.co/datasets/rogue-security/prompt-injections-benchmark.
+  # The 80/10/10 hash split holds out ~10% for honest in-distribution eval
+  # (see scripts/12_eval_external_benchmark.py --held-out test).
+  - name: rogue_injection_benchmark
+    loader: hf
+    hf_name: rogue-security/prompt-injections-benchmark
+    kind: rogue_injection
+    enabled: true
+
   - name: jackhhao_jailbreak
     loader: hf
     hf_name: jackhhao/jailbreak-classification
