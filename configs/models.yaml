@@ -8,7 +8,7 @@ fasttext:
 
 transformers:
   prompt_injection:
-    hf_name: fmops/distilbert-prompt-injection
+    hf_name: protectai/deberta-v3-base-prompt-injection-v2
     finetuned_path: models/finetuned/prompt_injection
     local_path: models/transformers/prompt_injection
     onnx_path: models/onnx/prompt_injection
@@ -22,17 +22,17 @@ transformers:
     int8_path: models/onnx_int8/jailbreak
 
   moderation_primary:
-    hf_name: oxyapi/albert-moderation-001
+    hf_name: KoalaAI/Text-Moderation
     finetuned_path: models/finetuned/moderation
-    local_path: models/transformers/oxyapi_moderation
-    onnx_path: models/onnx/oxyapi_moderation
-    int8_path: models/onnx_int8/oxyapi_moderation
+    local_path: models/transformers/koalaai_moderation
+    onnx_path: models/onnx/koalaai_moderation
+    int8_path: models/onnx_int8/koalaai_moderation
 
   moderation_fallback:
-    hf_name: ifmain/ModerationBERT-En-02
+    hf_name: oxyapi/albert-moderation-001
     finetuned_path: models/finetuned/moderation_bert
-    local_path: models/transformers/moderation_bert
-    onnx_path: models/onnx/moderation_bert
+    local_path: models/transformers/oxyapi_moderation
+    onnx_path: models/onnx/oxyapi_moderation
     int8_path: models/onnx_int8/moderation_bert
 
   # toxic_fallback disabled: Intel/toxic-prompt-roberta PR-AUC=0.43 (below random)

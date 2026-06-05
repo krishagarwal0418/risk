@@ -7,7 +7,7 @@ runtime:
   use_onnx: false       # Set to true to use FP32 ONNX (not INT8)
   full_scan_default: false
   enable_toxic_fallback: false
-  moderation_backend: oxyapi  # oxyapi (primary, best_F1=0.648) | moderationbert | tinysafe
+  moderation_backend: koalaai  # koalaai (primary, OpenAI categories) | oxyapi (-> fallback)
 
 inference:
   max_length: 128

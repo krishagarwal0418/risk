@@ -38,6 +38,16 @@ _CATEGORY_MAP: dict[str, list[str]] = {
     "illegal_activity": [C.ILLEGAL_ACTIVITY],
     "toxic": [C.TOXICITY],
     "toxicity": [C.TOXICITY],
+    # KoalaAI/Text-Moderation OpenAI category codes (id2label H/H2/HR/S/S3/SH/V/V2;
+    # OK = safe, handled by _SAFE_TOKENS below). Exact-match, normalised lowercase.
+    "h": [C.HATE],
+    "h2": [C.HATE, C.VIOLENCE],        # hate/threatening
+    "hr": [C.HARASSMENT, C.TOXICITY],   # harassment
+    "s": [C.SEXUAL],
+    "s3": [C.SEXUAL],                   # sexual/minors
+    "sh": [C.SELF_HARM],                # self-harm
+    "v": [C.VIOLENCE],
+    "v2": [C.VIOLENCE],                 # violence/graphic
 }
 
 _SAFE_TOKENS = ("safe", "benign", "ok", "none", "clean", "neutral")
