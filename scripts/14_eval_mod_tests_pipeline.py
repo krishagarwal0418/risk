@@ -2,7 +2,7 @@
 
 Pipeline under test:
   validation -> normalization -> deterministic rules -> FastText heads ->
-  mod_tests/prompt-guard-finetuned + mod_tests/toxic-bert
+  mod_tests/protectai-deberta-v3-base-prompt-injection + mod_tests/toxic-bert
 """
 
 from __future__ import annotations

@@ -2,7 +2,7 @@
 
 Flow:
   validation -> normalization -> deterministic rules -> FastText heads ->
-  local prompt-guard + toxic-bert transformer confirmers.
+  local ProtectAI prompt-injection + toxic-bert transformer confirmers.
 
 This is intentionally separate from the main ``SafetyClassifier`` so candidate
 models can be evaluated without changing production config.
@@ -73,7 +73,7 @@ class ModTestsSafetyPipeline:
         self.thresholds = Thresholds()
         self.full_scan_default = full_scan_default
         self.prompt_guard_path = Path(
-            prompt_guard_path or root / "mod_tests" / "prompt-guard-finetuned"
+            prompt_guard_path or root / "mod_tests" / "protectai-deberta-v3-base-prompt-injection"
         )
         self.toxic_bert_path = Path(toxic_bert_path or root / "mod_tests" / "toxic-bert")
         self.fasttext = None
@@ -87,7 +87,7 @@ class ModTestsSafetyPipeline:
                 str(self.prompt_guard_path),
                 backend="pytorch",
                 device=device,
-                name="mod_tests/prompt-guard-finetuned",
+                name="mod_tests/protectai-deberta-v3-base-prompt-injection",
             ),
             "toxic_bert": ToxicFallbackClassifier(
                 str(self.toxic_bert_path),
