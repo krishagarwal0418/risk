@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from safety_classifier import constants as C
-from safety_classifier.transformers_layer.finetune import TASK_LABELS
+from safety_classifier.transformers_layer.finetune import TASK_LABELS, _checkpoint_is_compatible
 
 
 def _load_script():
@@ -37,6 +37,29 @@ def test_koala_task_labels_match_supported_moderation_surface():
     ]
     assert C.DANGEROUS_INFORMATION not in labels
     assert C.ILLEGAL_ACTIVITY not in labels
+
+
+def test_incompatible_old_moderation_checkpoint_is_not_resumed(tmp_path):
+    checkpoint = tmp_path / "checkpoint-250"
+    checkpoint.mkdir()
+    checkpoint.joinpath("config.json").write_text(
+        json.dumps({
+            "num_labels": 8,
+            "id2label": {
+                "0": C.TOXICITY,
+                "1": C.HATE,
+                "2": C.HARASSMENT,
+                "3": C.SEXUAL,
+                "4": C.VIOLENCE,
+                "5": C.SELF_HARM,
+                "6": C.DANGEROUS_INFORMATION,
+                "7": C.ILLEGAL_ACTIVITY,
+            },
+        }),
+        encoding="utf-8",
+    )
+
+    assert _checkpoint_is_compatible(checkpoint, TASK_LABELS["koala_moderation"]) is False
 
 
 def test_clean_record_keeps_supported_labels_and_drops_safe_conflict():
@@ -111,6 +134,8 @@ def test_build_koala_data_filters_and_balances(tmp_path):
         safe_cap=10,
         max_train=100,
         max_eval=100,
+        low_label_target=0,
+        fold_low_label_eval_into_train=False,
         seed=13,
     )
 
@@ -124,3 +149,45 @@ def test_build_koala_data_filters_and_balances(tmp_path):
     assert C.ILLEGAL_ACTIVITY not in train_labels
     assert C.PROMPT_INJECTION not in train_labels
     assert summary["splits"]["train"]["rows"] == 2
+
+
+def test_low_label_oversampling_targets_sparse_labels_only():
+    mod = _load_script()
+    rows = [
+        {"text": "self harm one", "labels": [C.SELF_HARM], "source": "wildguardmix", "hash": "sh1"},
+        {"text": "hate one", "labels": [C.HATE], "source": "toxigen", "hash": "h1"},
+        {"text": "hate two", "labels": [C.HATE], "source": "toxigen", "hash": "h2"},
+    ]
+
+    out = mod._oversample_low_label_rows(rows, target=3, max_train=10, seed=13)
+    counts = mod._label_counts(out)
+
+    assert counts[C.SELF_HARM] == 3
+    assert counts[C.HATE] == 3
+    assert any(r.get("oversampled_label") == C.SELF_HARM for r in out)
+
+
+def test_low_label_eval_fold_moves_only_sparse_label_rows():
+    mod = _load_script()
+    splits = {
+        "train": [
+            {"text": "self harm train", "labels": [C.SELF_HARM], "source": "wildguardmix", "hash": "tr1"},
+            {"text": "hate train one", "labels": [C.HATE], "source": "toxigen", "hash": "tr2"},
+            {"text": "hate train two", "labels": [C.HATE], "source": "toxigen", "hash": "tr3"},
+        ],
+        "val": [
+            {"text": "self harm val", "labels": [C.SELF_HARM], "source": "wildguardmix", "hash": "v1"},
+            {"text": "hate val", "labels": [C.HATE], "source": "toxigen", "hash": "v2"},
+        ],
+        "test": [
+            {"text": "safe test", "labels": [C.SAFE], "source": "xstest", "hash": "t1"},
+        ],
+    }
+
+    summary = mod._fold_low_label_eval_rows_into_train(splits, low_label_target=2)
+
+    assert summary["labels"] == [C.SELF_HARM]
+    assert summary["moved_rows"] == 1
+    assert len(splits["train"]) == 4
+    assert all(C.SELF_HARM not in row["labels"] for row in splits["val"])
+    assert any(C.HATE in row["labels"] for row in splits["val"])

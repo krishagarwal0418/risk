@@ -146,6 +146,57 @@ def _has_positive(row: dict[str, Any]) -> bool:
     return any(lab in KOALA_LABEL_SET for lab in row.get("labels", []))
 
 
+def _label_counts(rows: list[dict[str, Any]]) -> Counter:
+    counts: Counter = Counter()
+    for row in rows:
+        for lab in row.get("labels", []):
+            if lab in KOALA_LABEL_SET:
+                counts[lab] += 1
+    return counts
+
+
+def _oversample_low_label_rows(
+    rows: list[dict[str, Any]],
+    *,
+    target: int,
+    max_train: int,
+    seed: int,
+) -> list[dict[str, Any]]:
+    if target <= 0:
+        return rows
+    rng = random.Random(seed)
+    counts = _label_counts(rows)
+    by_label = {
+        lab: [row for row in rows if lab in row.get("labels", [])]
+        for lab in KOALA_LABELS
+    }
+    additions: list[dict[str, Any]] = []
+    room = max_train - len(rows) if max_train else 10**9
+    for lab in KOALA_LABELS:
+        candidates = by_label[lab]
+        if not candidates or counts[lab] >= target:
+            continue
+        shuffled = candidates[:]
+        rng.shuffle(shuffled)
+        idx = 0
+        while counts[lab] < target and room > 0:
+            src = shuffled[idx % len(shuffled)]
+            idx += 1
+            dup = dict(src)
+            dup["source"] = f"{src.get('source', '')}::low_label_oversample"
+            dup["hash"] = f"{src.get('hash') or _stable_hash(src['text'])}::oversample::{lab}::{idx}"
+            dup["oversampled_label"] = lab
+            additions.append(dup)
+            room -= 1
+            for row_lab in dup.get("labels", []):
+                if row_lab in KOALA_LABEL_SET:
+                    counts[row_lab] += 1
+    if additions:
+        rows = rows + additions
+        rng.shuffle(rows)
+    return rows
+
+
 def _cap_train_rows(
     rows: list[dict[str, Any]],
     *,
@@ -153,6 +204,7 @@ def _cap_train_rows(
     safe_ratio: float,
     safe_cap: int,
     max_train: int,
+    low_label_target: int,
     seed: int,
 ) -> list[dict[str, Any]]:
     rng = random.Random(seed)
@@ -175,9 +227,45 @@ def _cap_train_rows(
     safe_keep = min(len(safe), safe_cap, int(max(len(kept_pos), 1) * safe_ratio))
     final = kept_pos + safe[:safe_keep]
     rng.shuffle(final)
+    final = _oversample_low_label_rows(
+        final, target=low_label_target, max_train=max_train, seed=seed
+    )
     if max_train and len(final) > max_train:
         final = final[:max_train]
     return final
+
+
+def _fold_low_label_eval_rows_into_train(
+    splits: dict[str, list[dict[str, Any]]],
+    *,
+    low_label_target: int,
+) -> dict[str, Any]:
+    train_counts = _label_counts(splits["train"])
+    low_labels = {
+        lab for lab in KOALA_LABELS
+        if 0 < train_counts[lab] < low_label_target
+    }
+    if not low_labels:
+        return {"enabled": True, "labels": [], "moved_rows": 0}
+
+    moved: list[dict[str, Any]] = []
+    for split in ("val", "test"):
+        kept: list[dict[str, Any]] = []
+        for row in splits[split]:
+            if any(lab in low_labels for lab in row.get("labels", [])):
+                copy = dict(row)
+                copy["source"] = f"{row.get('source', '')}::folded_from_{split}"
+                copy["folded_from_split"] = split
+                moved.append(copy)
+            else:
+                kept.append(row)
+        splits[split] = kept
+    splits["train"].extend(moved)
+    return {
+        "enabled": True,
+        "labels": sorted(low_labels),
+        "moved_rows": len(moved),
+    }
 
 
 def _cap_eval_rows(rows: list[dict[str, Any]], *, max_eval: int, seed: int) -> list[dict[str, Any]]:
@@ -232,6 +320,8 @@ def build_koala_data(
     safe_cap: int,
     max_train: int,
     max_eval: int,
+    low_label_target: int,
+    fold_low_label_eval_into_train: bool,
     seed: int,
 ) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -261,19 +351,26 @@ def build_koala_data(
             row["hash"] = key
             cleaned.append(row)
         cleaned = _dedupe_rows(cleaned)
-        if split == "train":
-            cleaned = _cap_train_rows(
-                cleaned,
-                max_per_label=max_per_label,
-                safe_ratio=safe_ratio,
-                safe_cap=safe_cap,
-                max_train=max_train,
-                seed=seed,
-            )
-        else:
-            cleaned = _cap_eval_rows(cleaned, max_eval=max_eval, seed=seed)
         splits[split] = cleaned
         issues[split] = dict(split_issues)
+
+    low_label_fold = {"enabled": False, "labels": [], "moved_rows": 0}
+    if fold_low_label_eval_into_train:
+        low_label_fold = _fold_low_label_eval_rows_into_train(
+            splits, low_label_target=low_label_target
+        )
+
+    splits["train"] = _cap_train_rows(
+        splits["train"],
+        max_per_label=max_per_label,
+        safe_ratio=safe_ratio,
+        safe_cap=safe_cap,
+        max_train=max_train,
+        low_label_target=low_label_target,
+        seed=seed,
+    )
+    for split in ("val", "test"):
+        splits[split] = _cap_eval_rows(splits[split], max_eval=max_eval, seed=seed)
 
     for split, rows in splits.items():
         _write_jsonl(output_dir / f"{split}.jsonl", rows)
@@ -293,6 +390,8 @@ def build_koala_data(
             "safe_cap": safe_cap,
             "max_train": max_train,
             "max_eval": max_eval,
+            "low_label_target": low_label_target,
+            "low_label_fold": low_label_fold,
         },
         "issues": issues,
         "splits": {split: _summarize(rows) for split, rows in splits.items()},
@@ -425,6 +524,12 @@ def main() -> None:
     parser.add_argument("--safe-cap", type=int, default=50000)
     parser.add_argument("--max-train", type=int, default=180000)
     parser.add_argument("--max-eval", type=int, default=12000)
+    parser.add_argument("--low-label-target", type=int, default=6000,
+                        help="Oversample supported train labels below this count")
+    parser.add_argument("--fold-low-label-eval-into-train", action="store_true",
+                        help="Move val/test positives for low-count labels into train. "
+                             "Use only when maximizing training signal matters more "
+                             "than a clean held-out metric for those labels.")
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=1e-5)
@@ -451,6 +556,8 @@ def main() -> None:
             safe_cap=args.safe_cap,
             max_train=args.max_train,
             max_eval=args.max_eval,
+            low_label_target=args.low_label_target,
+            fold_low_label_eval_into_train=args.fold_low_label_eval_into_train,
             seed=args.seed,
         )
         print(json.dumps(build_summary["splits"], indent=2))

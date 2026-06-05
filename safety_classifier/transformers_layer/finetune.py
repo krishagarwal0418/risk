@@ -113,6 +113,25 @@ def compute_class_weights(rows: list[dict], label_list: list[str]) -> list[float
     return pos_weight.tolist()
 
 
+def _checkpoint_is_compatible(checkpoint: str | Path, label_list: list[str]) -> bool:
+    """Return True when an auto-resume checkpoint matches the current label head."""
+    cfg_path = Path(checkpoint) / "config.json"
+    if not cfg_path.exists():
+        return True
+    try:
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return False
+    if int(cfg.get("num_labels", len(label_list))) != len(label_list):
+        return False
+    id2label = cfg.get("id2label") or {}
+    if id2label:
+        labels = [id2label[str(i)] for i in range(len(label_list)) if str(i) in id2label]
+        if labels and labels != label_list:
+            return False
+    return True
+
+
 def finetune(
     model_name: str,
     task: str,
@@ -283,7 +302,14 @@ def finetune(
 
     last_ckpt = get_last_checkpoint(output_dir) if Path(output_dir).is_dir() else None
     if last_ckpt:
-        print(f"[finetune] resuming from checkpoint: {last_ckpt}")
+        if _checkpoint_is_compatible(last_ckpt, label_list):
+            print(f"[finetune] resuming from checkpoint: {last_ckpt}")
+        else:
+            print(
+                f"[finetune] ignoring incompatible checkpoint: {last_ckpt} "
+                f"(expected labels={label_list})"
+            )
+            last_ckpt = None
     trainer.train(resume_from_checkpoint=last_ckpt)
     metrics = trainer.evaluate()
     trainer.save_model(output_dir)
