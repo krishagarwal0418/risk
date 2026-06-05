@@ -53,6 +53,9 @@ def main() -> None:
     parser.add_argument("--skip-download", action="store_true")
     parser.add_argument("--skip-training", action="store_true",
                         help="Skip data prep + FastText training")
+    parser.add_argument("--skip-fasttext", action="store_true",
+                        help="Skip ONLY the FastText train/eval/calibrate stages "
+                             "(still prepares data for fine-tuning)")
     parser.add_argument("--skip-finetuning", action="store_true")
     parser.add_argument("--device", default="cuda", choices=["cuda", "cpu"])
     parser.add_argument("--batch-size", type=int, default=64,
@@ -95,15 +98,15 @@ def main() -> None:
 
         ("03. Train FastText heads",
          [sys.executable, script("03_train_fasttext_heads.py")],
-         args.skip_training, prep_env),
+         args.skip_training or args.skip_fasttext, prep_env),
 
         ("04. Evaluate FastText heads",
          [sys.executable, script("04_eval_fasttext_heads.py")],
-         args.skip_training, None),
+         args.skip_training or args.skip_fasttext, None),
 
         ("04b. Calibrate FastText thresholds",
          [sys.executable, script("04b_calibrate_fasttext_thresholds.py")],
-         args.skip_training, None),
+         args.skip_training or args.skip_fasttext, None),
 
         ("05. Download transformers",
          [sys.executable, script("05_download_transformers.py")],
