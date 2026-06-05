@@ -134,7 +134,11 @@ def finetune(
     )
 
     def tokenize(batch):
-        enc = tokenizer(batch["text"], truncation=True, padding=True, max_length=128)
+        # padding="max_length" pads EVERY example to exactly max_length. With
+        # padding=True each .map chunk padded to its own batch-max (e.g. 103 vs
+        # 128), and the default collator can't stack mismatched lengths
+        # ("expected sequence of length 103 ... got 128"). Fixed length avoids it.
+        enc = tokenizer(batch["text"], truncation=True, padding="max_length", max_length=128)
         enc["labels"] = batch["labels"]
         return enc
 
