@@ -491,19 +491,25 @@ def evaluate(output_dir: Path, data_dir: Path, batch_size: int) -> dict[str, Any
                 lab: _label_threshold_metrics(gold_by_label[lab], scores_by_label[lab])
                 for lab in KOALA_LABELS
             }
+            supported_metrics = [
+                m for m in per_label.values()
+                if m["support_positive"] > 0
+            ]
+            macro_base = supported_metrics or list(per_label.values())
             results[split] = {
                 "examples": len(rows),
                 "latency_ms": percentiles(latencies),
                 "macro": {
                     "f1@0.5": round(
-                        sum(m["f1"] for m in per_label.values()) / len(per_label), 4
+                        sum(m["f1"] for m in macro_base) / len(macro_base), 4
                     ),
                     "best_f1": round(
-                        sum(m["best_f1"] for m in per_label.values()) / len(per_label), 4
+                        sum(m["best_f1"] for m in macro_base) / len(macro_base), 4
                     ),
                     "pr_auc": round(
-                        sum(m["pr_auc"] for m in per_label.values()) / len(per_label), 4
+                        sum(m["pr_auc"] for m in macro_base) / len(macro_base), 4
                     ),
+                    "labels_with_support": len(supported_metrics),
                 },
                 "per_label": per_label,
             }

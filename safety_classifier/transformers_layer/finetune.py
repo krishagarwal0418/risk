@@ -115,7 +115,8 @@ def compute_class_weights(rows: list[dict], label_list: list[str]) -> list[float
 
 def _checkpoint_is_compatible(checkpoint: str | Path, label_list: list[str]) -> bool:
     """Return True when an auto-resume checkpoint matches the current label head."""
-    cfg_path = Path(checkpoint) / "config.json"
+    checkpoint = Path(checkpoint)
+    cfg_path = checkpoint / "config.json"
     if not cfg_path.exists():
         return True
     try:
@@ -128,6 +129,28 @@ def _checkpoint_is_compatible(checkpoint: str | Path, label_list: list[str]) -> 
     if id2label:
         labels = [id2label[str(i)] for i in range(len(label_list)) if str(i) in id2label]
         if labels and labels != label_list:
+            return False
+    safetensors_path = checkpoint / "model.safetensors"
+    if safetensors_path.exists():
+        try:
+            from safetensors import safe_open
+
+            with safe_open(str(safetensors_path), framework="pt", device="cpu") as fh:
+                if "classifier.weight" in fh.keys():
+                    shape = fh.get_tensor("classifier.weight").shape
+                    return int(shape[0]) == len(label_list)
+        except Exception:  # noqa: BLE001 - corrupt/incomplete checkpoint
+            return False
+    bin_path = checkpoint / "pytorch_model.bin"
+    if bin_path.exists():
+        try:
+            import torch
+
+            state = torch.load(bin_path, map_location="cpu")
+            weight = state.get("classifier.weight")
+            if weight is not None:
+                return int(weight.shape[0]) == len(label_list)
+        except Exception:  # noqa: BLE001 - corrupt/incomplete checkpoint
             return False
     return True
 
@@ -310,7 +333,18 @@ def finetune(
                 f"(expected labels={label_list})"
             )
             last_ckpt = None
-    trainer.train(resume_from_checkpoint=last_ckpt)
+    try:
+        trainer.train(resume_from_checkpoint=last_ckpt)
+    except RuntimeError as exc:
+        msg = str(exc)
+        if last_ckpt and "size mismatch for classifier" in msg:
+            print(
+                f"[finetune] checkpoint had incompatible classifier weights; "
+                f"restarting from base model instead: {last_ckpt}"
+            )
+            trainer.train(resume_from_checkpoint=None)
+        else:
+            raise
     metrics = trainer.evaluate()
     trainer.save_model(output_dir)
     tokenizer.save_pretrained(output_dir)

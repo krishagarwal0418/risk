@@ -62,6 +62,30 @@ def test_incompatible_old_moderation_checkpoint_is_not_resumed(tmp_path):
     assert _checkpoint_is_compatible(checkpoint, TASK_LABELS["koala_moderation"]) is False
 
 
+def test_checkpoint_tensor_shape_overrides_misleading_config(tmp_path):
+    import torch
+    from safetensors.torch import save_file
+
+    checkpoint = tmp_path / "checkpoint-250"
+    checkpoint.mkdir()
+    checkpoint.joinpath("config.json").write_text(
+        json.dumps({
+            "num_labels": 6,
+            "id2label": {str(i): lab for i, lab in enumerate(TASK_LABELS["koala_moderation"])},
+        }),
+        encoding="utf-8",
+    )
+    save_file(
+        {
+            "classifier.weight": torch.zeros(8, 768),
+            "classifier.bias": torch.zeros(8),
+        },
+        checkpoint / "model.safetensors",
+    )
+
+    assert _checkpoint_is_compatible(checkpoint, TASK_LABELS["koala_moderation"]) is False
+
+
 def test_clean_record_keeps_supported_labels_and_drops_safe_conflict():
     mod = _load_script()
     row, reason = mod._clean_record(
