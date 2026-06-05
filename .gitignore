@@ -20,6 +20,7 @@ models/fine/*
 models/**/*.safetensors
 models/**/*.pt
 models/**/*.pth
+mod_tests/*
 reports/*
 
 # keep the directory structure
