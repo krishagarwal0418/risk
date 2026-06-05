@@ -230,7 +230,7 @@ def _evaluate_dataset(
     by_thr = {thr: _metrics_at(gold, scores, thr) for thr in grid}
     best_thr = max(grid, key=lambda thr: by_thr[thr]["f1"])
     high_recall = [thr for thr in grid if by_thr[thr]["recall"] >= 0.90]
-    high_recall_thr = max(high_recall) if high_recall else best_thr
+    high_recall_thr = max(high_recall) if high_recall else None
     return {
         **meta,
         "examples": len(gold),
@@ -240,7 +240,7 @@ def _evaluate_dataset(
         "roc_auc": roc_auc,
         "at_0_5": by_thr[0.5],
         "best_f1": by_thr[best_thr],
-        "high_recall": by_thr[high_recall_thr],
+        "high_recall": by_thr[high_recall_thr] if high_recall_thr is not None else None,
         "latency_ms": percentiles(latencies),
     }
 
@@ -286,8 +286,8 @@ def run_eval(
             r["at_0_5"]["f1"],
             r["best_f1"]["f1"],
             r["best_f1"]["threshold"],
-            r["high_recall"]["precision"],
-            r["high_recall"]["recall"],
+            r["high_recall"]["precision"] if r["high_recall"] else "n/a",
+            r["high_recall"]["recall"] if r["high_recall"] else "n/a",
             r["latency_ms"]["p95"],
         ]
         for name, r in results.items()
