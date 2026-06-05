@@ -191,8 +191,14 @@ def finetune(
     # per-device batch; the optimizer still sees the full effective batch.
     per_device = min(batch_size, max_device_batch)
     grad_accum = max(1, round(batch_size / per_device))
+    # DeBERTa-v1 ("deberta") masks attention with finfo.min, which overflows in
+    # fp16 ("value cannot be converted to type c10::Half without overflow").
+    # Disable fp16 for that architecture; keep it for deberta-v2, albert, bert, etc.
+    model_type = getattr(model.config, "model_type", "")
+    use_fp16 = use_cuda and model_type != "deberta"
     print(f"[finetune] per_device_batch={per_device} x grad_accum={grad_accum} "
-          f"= effective {per_device * grad_accum}")
+          f"= effective {per_device * grad_accum} | fp16={use_fp16} "
+          f"(model_type={model_type})")
     args = TrainingArguments(
         output_dir=output_dir,
         num_train_epochs=epochs,
@@ -200,8 +206,8 @@ def finetune(
         per_device_eval_batch_size=per_device,
         gradient_accumulation_steps=grad_accum,
         learning_rate=lr,
-        # Mixed precision on GPU: ~2x faster on a T4 with negligible quality impact.
-        fp16=use_cuda,
+        # Mixed precision on GPU: ~2x faster. Skipped for deberta-v1 (fp16 overflow).
+        fp16=use_fp16,
         dataloader_num_workers=2,
         # Step-based save/eval so a crash or disconnect only loses the steps since
         # the last checkpoint (not the whole run). save_total_limit caps disk use.
