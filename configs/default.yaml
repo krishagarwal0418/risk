@@ -8,7 +8,7 @@ runtime:
   use_int8: false
   full_scan_default: false
   enable_toxic_fallback: false
-  moderation_backend: moderationbert  # moderationbert | oxyapi | tinysafe
+  moderation_backend: oxyapi  # oxyapi (primary, best_F1=0.648) | moderationbert | tinysafe
 
 inference:
   max_length: 128
