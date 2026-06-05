@@ -112,6 +112,7 @@ def finetune(
     lr: float = 2e-5,
     val_limit: int = 4000,
     max_device_batch: int = 32,
+    init_weights_path: str | None = None,
 ) -> dict[str, Any]:
     import os as _os
     # Reduce CUDA fragmentation OOMs (the allocator can reuse freed blocks).
@@ -151,6 +152,18 @@ def finetune(
         label2id={l: i for i, l in enumerate(label_list)},
         ignore_mismatched_sizes=True,
     )
+
+    # Warm-start: overlay previously-trained weights (e.g. a saved model.safetensors
+    # from an interrupted run) onto the architecture. This is NOT a true resume
+    # (no optimizer/scheduler state), but it continues from the partially-trained
+    # weights instead of the base model, preserving prior progress.
+    if init_weights_path:
+        from safetensors.torch import load_file as _load_safetensors
+
+        state = _load_safetensors(init_weights_path)
+        missing, unexpected = model.load_state_dict(state, strict=False)
+        print(f"[finetune] warm-started from {init_weights_path} "
+              f"(missing={len(missing)} unexpected={len(unexpected)} keys)")
 
     def tokenize(batch):
         # padding="max_length" pads EVERY example to exactly max_length. With

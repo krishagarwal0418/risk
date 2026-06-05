@@ -32,6 +32,9 @@ def main() -> None:
                         help="Fine-tune epochs (2-3 recommended)")
     parser.add_argument("--lr", type=float, default=3e-5,
                         help="Learning rate (3e-5 for moderation task)")
+    parser.add_argument("--init-weights", default=None,
+                        help="Warm-start from a saved .safetensors (e.g. weights "
+                             "from an interrupted run) instead of the base model.")
     args = parser.parse_args()
 
     root = repo_root()
@@ -52,6 +55,8 @@ def main() -> None:
     print(f"Epochs: {args.epochs}, LR: {args.lr}")
     print()
 
+    if args.init_weights:
+        print(f"Warm-starting from: {args.init_weights}")
     metrics = finetune(
         model_name=model_name,
         task="moderation",
@@ -61,6 +66,7 @@ def main() -> None:
         epochs=args.epochs,
         batch_size=args.batch_size,
         lr=args.lr,
+        init_weights_path=args.init_weights,
     )
 
     print()
