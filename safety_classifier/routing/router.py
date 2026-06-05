@@ -61,7 +61,7 @@ class Router:
         window_token_budget: int = 128,
         long_text_threshold: int = 200,
         toxic_medium_band: tuple[float, float] = (0.30, 0.70),
-        fast_block_threshold: float = 0.90,
+        fast_block_threshold: float | None = None,
     ) -> None:
         self.fasttext = fasttext_router
         self.models = models or {}
@@ -100,13 +100,15 @@ class Router:
                 add("toxic", "full_scan enabled -> running toxic fallback")
             return to_run, reasons
 
-        # Fast-block path: attack head is reliable (precision@1=0.907). When FastText
-        # is very confident on jailbreak or prompt_injection, the transformer would
-        # confirm it anyway — skip it and let the merged FastText score trigger the
-        # block decision. Abuse/high_risk heads are NOT fast-blocked (precision@1=0.42).
+        # Optional fast-block path. Keep disabled by default: current attack-head
+        # routing eval shows high-score FastText is not precise enough to replace
+        # the prompt-injection transformer on rough/rogue data.
         ft_jb = ft_scores.get(C.JAILBREAK, 0.0)
         ft_pi = ft_scores.get(C.PROMPT_INJECTION, 0.0)
-        if ft_jb >= self.fast_block_threshold or ft_pi >= self.fast_block_threshold:
+        if (
+            self.fast_block_threshold is not None
+            and (ft_jb >= self.fast_block_threshold or ft_pi >= self.fast_block_threshold)
+        ):
             reasons.append(
                 f"FastText attack score {max(ft_jb, ft_pi):.3f} >= "
                 f"fast_block_threshold {self.fast_block_threshold} -> skipping transformer"

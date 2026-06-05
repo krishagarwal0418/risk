@@ -26,6 +26,28 @@ def test_routes_prompt_injection_to_prompt_model():
     assert result["decision"] == C.DECISION_BLOCK
 
 
+def test_high_fasttext_attack_score_still_confirms_by_default():
+    ft = MockFastText({C.PROMPT_INJECTION: 0.99}, ["prompt_injection"])
+    router = Router(fasttext_router=ft, models=_models(), thresholds=Thresholds())
+    result = router.route("high scoring attack-like text")
+
+    assert "protectai/pi" in result["triggered_models"]
+
+
+def test_fast_block_shortcut_is_explicit_opt_in():
+    ft = MockFastText({C.PROMPT_INJECTION: 0.99}, ["prompt_injection"])
+    router = Router(
+        fasttext_router=ft,
+        models=_models(),
+        thresholds=Thresholds(),
+        fast_block_threshold=0.90,
+    )
+    result = router.route("high scoring attack-like text")
+
+    assert "protectai/pi" not in result["triggered_models"]
+    assert result["scores"][C.PROMPT_INJECTION] == 0.99
+
+
 def test_routes_self_harm_to_moderation_model():
     ft = MockFastText({C.SELF_HARM: 0.4}, ["moderation"])
     router = Router(fasttext_router=ft, models=_models(), thresholds=Thresholds())
