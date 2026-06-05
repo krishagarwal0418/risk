@@ -88,6 +88,15 @@ def main() -> None:
             "--device", "cuda", "--batch-size", "64"
         ], False),
 
+        ("09. Validate fine-tuning data", [
+            sys.executable, str(root / "scripts" / "09_validate_finetuning_data.py"),
+            "--input", "data/processed/all_train.jsonl",
+            "--output", "data/finetuning_train.jsonl",
+            "--min-length", "10",
+            "--max-length", "512",
+            "--min-label-count", "50"
+        ], args.skip_finetuning),
+
         ("09a. Fine-tune prompt injection", [
             sys.executable, str(root / "scripts" / "09a_finetune_prompt_injection.py"),
             "--device", "cuda",

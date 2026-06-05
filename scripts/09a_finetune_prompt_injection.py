@@ -35,7 +35,9 @@ def main() -> None:
     args = parser.parse_args()
 
     root = repo_root()
-    train_path = str(root / "data" / "processed" / "all_train.jsonl")
+    # Use validated fine-tuning data (deduplicated, filtered for quality)
+    train_path = str(root / "data" / "finetuning_train.jsonl")
+    # Use validation set (not filtered to keep real distribution)
     val_path = str(root / "data" / "processed" / "all_val.jsonl")
     output_dir = str(root / "models" / "finetuned" / "prompt_injection")
 
