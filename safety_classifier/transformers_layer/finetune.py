@@ -71,13 +71,20 @@ def build_dataset(rows: list[dict], label_list: list[str]):
 
 
 def compute_class_weights(rows: list[dict], label_list: list[str]) -> list[float]:
-    """Positive-class weights for BCEWithLogitsLoss (one entry per label).
+    """Per-label ``pos_weight`` for ``BCEWithLogitsLoss`` (one entry per label).
 
-    Uses sqrt-inverse-frequency: gentler than raw inverse frequency (which would
-    assign a 400x weight to a label that is 400x rarer and destabilise training),
-    but still gives genuinely rare labels — self_harm, dangerous_information — a
-    meaningful boost. The data is pre-balanced upstream (safe down-sampled), so
-    these weights only correct the residual imbalance across risk labels.
+    For BCE, ``pos_weight`` is the factor by which a positive is weighted relative
+    to a negative for THAT label, and the correct value is ``num_neg / num_pos``.
+    A previous version normalised sqrt-inverse-frequency *across labels* (÷ mean),
+    which collapsed to ~1.0 whenever the labels had similar frequency — e.g. the
+    attack task (PI ~1.5%, JB ~1.2%) got pos_weight ≈ 1.0 and the model learned to
+    predict "negative" almost always (injection scores crushed near 0, ~66% recall
+    ceiling). That is wrong: each label's pos_weight must reflect its OWN pos/neg
+    balance, independent of the other labels.
+
+    We use ``sqrt(neg / pos)`` — the full ``neg/pos`` ratio is correct but can be
+    large (≈137 for self_harm) and destabilise training, so the sqrt softens it.
+    Clamped to [1, 30]: never down-weight positives, cap extreme upweighting.
     """
     import numpy as np
 
@@ -87,12 +94,11 @@ def compute_class_weights(rows: list[dict], label_list: list[str]) -> list[float
             if lab in r.get("labels", []):
                 counts[i] += 1
     total = max(len(rows), 1)
-    # sqrt-inverse frequency, normalised to mean 1, clamped to a wide band so a
-    # label seen ~1000x in 200k rows still gets a strong (but bounded) weight.
-    weights = np.sqrt(total / (counts + 1.0))
-    weights = weights / weights.mean()
-    weights = np.clip(weights, 0.5, 20.0)
-    return weights.tolist()
+    pos = np.maximum(counts, 1.0)
+    neg = np.maximum(total - counts, 1.0)
+    pos_weight = np.sqrt(neg / pos)
+    pos_weight = np.clip(pos_weight, 1.0, 30.0)
+    return pos_weight.tolist()
 
 
 def finetune(
