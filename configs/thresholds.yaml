@@ -17,34 +17,34 @@ jailbreak:
   block: 0.80
 
 toxicity:
-  route: 0.20
-  review: 0.60
-  block: 0.85
+  route: 0.05   # model ceiling ~59% recall at 0.1; route aggressively, let transformer decide
+  review: 0.30
+  block: 0.60
 
 hate:
-  route: 0.20
-  review: 0.50
-  block: 0.80
+  route: 0.05   # model ceiling ~38% recall even at lowest; route everything, transformer decides
+  review: 0.20
+  block: 0.40   # low block because model underscores AI-generated hate
 
 sexual:
   route: 0.20
-  review: 0.60
-  block: 0.85
+  review: 0.50
+  block: 0.75
 
 violence:
-  route: 0.20
-  review: 0.60
-  block: 0.85
+  route: 0.05   # 46% recall at 0.05; similar ceiling to hate
+  review: 0.30
+  block: 0.60
 
 self_harm:
-  route: 0.15
-  review: 0.35
-  block: 0.70
+  route: 0.10   # 66% recall at 0.1 (high_recall_threshold from eval)
+  review: 0.25
+  block: 0.55
 
 harassment:
   route: 0.20
-  review: 0.60
-  block: 0.85
+  review: 0.40  # 90% recall at 0.25; review threshold pulled down
+  block: 0.70
 
 dangerous_information:
   route: 0.20
