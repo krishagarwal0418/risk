@@ -88,7 +88,7 @@ def main() -> None:
             "--device", "cuda", "--batch-size", "64"
         ], False),
 
-        ("09a. Fine-tune prompt injection model", [
+        ("09a. Fine-tune prompt injection", [
             sys.executable, str(root / "scripts" / "09a_finetune_prompt_injection.py"),
             "--device", "cuda",
             "--batch-size", str(args.batch_size),
@@ -96,8 +96,24 @@ def main() -> None:
             "--lr", "2e-5"
         ], args.skip_finetuning),
 
-        ("09b. Fine-tune moderation model", [
+        ("09b. Fine-tune jailbreak detector", [
+            sys.executable, str(root / "scripts" / "09b_finetune_jailbreak.py"),
+            "--device", "cuda",
+            "--batch-size", str(args.batch_size),
+            "--epochs", str(args.epochs),
+            "--lr", "2e-5"
+        ], args.skip_finetuning),
+
+        ("09c. Fine-tune moderation (primary)", [
             sys.executable, str(root / "scripts" / "09_finetune_moderation.py"),
+            "--device", "cuda",
+            "--batch-size", str(args.batch_size),
+            "--epochs", str(args.epochs),
+            "--lr", "3e-5"
+        ], args.skip_finetuning),
+
+        ("09d. Fine-tune moderation (fallback)", [
+            sys.executable, str(root / "scripts" / "09c_finetune_moderation_fallback.py"),
             "--device", "cuda",
             "--batch-size", str(args.batch_size),
             "--epochs", str(args.epochs),

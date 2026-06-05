@@ -16,6 +16,7 @@ transformers:
 
   jailbreak:
     hf_name: madhurjindal/Jailbreak-Detector
+    finetuned_path: models/finetuned/jailbreak
     local_path: models/transformers/jailbreak
     onnx_path: models/onnx/jailbreak
     int8_path: models/onnx_int8/jailbreak
@@ -29,6 +30,7 @@ transformers:
 
   moderation_fallback:
     hf_name: ifmain/ModerationBERT-En-02
+    finetuned_path: models/finetuned/moderation_bert
     local_path: models/transformers/moderation_bert
     onnx_path: models/onnx/moderation_bert
     int8_path: models/onnx_int8/moderation_bert
