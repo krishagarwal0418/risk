@@ -104,6 +104,7 @@ def finetune(
     epochs: int = 3,
     batch_size: int = 16,
     lr: float = 2e-5,
+    val_limit: int = 4000,
 ) -> dict[str, Any]:
     import numpy as np
     import torch
@@ -119,6 +120,13 @@ def finetune(
     label_list = TASK_LABELS[task]
     train_rows = _load_jsonl(train_path)
     val_rows = _load_jsonl(val_path)
+    # The full val set (~76k) is needlessly slow to evaluate every checkpoint.
+    # A deterministic random sample is plenty for model selection.
+    if val_limit and len(val_rows) > val_limit:
+        import random
+
+        random.Random(13).shuffle(val_rows)
+        val_rows = val_rows[:val_limit]
     class_weights = torch.tensor(
         compute_class_weights(train_rows, label_list), dtype=torch.float
     )
@@ -171,8 +179,13 @@ def finetune(
         per_device_train_batch_size=batch_size,
         per_device_eval_batch_size=batch_size,
         learning_rate=lr,
-        eval_strategy="epoch",
-        save_strategy="epoch",
+        # Step-based save/eval so a crash or disconnect only loses the steps since
+        # the last checkpoint (not the whole run). save_total_limit caps disk use.
+        eval_strategy="steps",
+        save_strategy="steps",
+        eval_steps=250,
+        save_steps=250,
+        save_total_limit=2,
         load_best_model_at_end=True,
         metric_for_best_model="macro_f1",
         greater_is_better=True,
@@ -188,7 +201,15 @@ def finetune(
         compute_metrics=compute_metrics,
         callbacks=[EarlyStoppingCallback(early_stopping_patience=2)],
     )
-    trainer.train()
+
+    # Auto-resume: if a checkpoint already exists in output_dir (from an
+    # interrupted run), continue from it; otherwise train from scratch.
+    from transformers.trainer_utils import get_last_checkpoint
+
+    last_ckpt = get_last_checkpoint(output_dir) if Path(output_dir).is_dir() else None
+    if last_ckpt:
+        print(f"[finetune] resuming from checkpoint: {last_ckpt}")
+    trainer.train(resume_from_checkpoint=last_ckpt)
     metrics = trainer.evaluate()
     trainer.save_model(output_dir)
     tokenizer.save_pretrained(output_dir)
