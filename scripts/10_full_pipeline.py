@@ -61,6 +61,9 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=64,
                         help="Fine-tuning per-device batch size")
     parser.add_argument("--epochs", type=int, default=2)
+    parser.add_argument("--moderation-epochs", type=int, default=None,
+                        help="Epochs for the PRIMARY moderation model (KoalaAI). "
+                             "Defaults to --epochs. Use e.g. 2 when --epochs 1.")
     parser.add_argument("--max-per-label", type=int, default=25000,
                         help="FastText per-label cap for attack/abuse heads")
     parser.add_argument("--max-per-label-high-risk", type=int, default=3000,
@@ -85,6 +88,7 @@ def main() -> None:
 
     bs = str(args.batch_size)
     ep = str(args.epochs)
+    mod_ep = str(args.moderation_epochs if args.moderation_epochs is not None else args.epochs)
     dev = args.device
 
     stages = [
@@ -136,7 +140,7 @@ def main() -> None:
 
         ("09c. Fine-tune moderation (primary)",
          [sys.executable, script("09_finetune_moderation.py"),
-          "--device", dev, "--batch-size", bs, "--epochs", ep, "--lr", "3e-5"],
+          "--device", dev, "--batch-size", bs, "--epochs", mod_ep, "--lr", "3e-5"],
          args.skip_finetuning, None),
 
         ("09d. Fine-tune moderation (fallback)",

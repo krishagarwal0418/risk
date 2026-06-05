@@ -65,6 +65,10 @@ def main() -> None:
                         help="Warn if a label has fewer than this many examples")
     parser.add_argument("--safe-cap", type=int, default=60000,
                         help="Max number of safe-only examples to keep (0 = keep all)")
+    parser.add_argument("--max-per-risk-label", type=int, default=40000,
+                        help="Cap rows per risk label (hate/toxicity share a budget). "
+                             "Speeds up moderation FT + improves sparse-label balance. "
+                             "0 = no cap.")
     parser.add_argument("--attack-output", default="data/finetuning_attack.jsonl",
                         help="Attack-focused subset for the PI/JB fine-tunes")
     parser.add_argument("--attack-neg-ratio", type=int, default=6,
@@ -137,6 +141,28 @@ def main() -> None:
         rng.shuffle(safe_records)
         kept_safe = safe_records[: args.safe_cap]
         print(f"Down-sampled safe: {len(safe_records)} -> {len(kept_safe)}")
+
+    # Cap over-represented risk labels (hate/toxicity dominate from ToxiGen, ~100k
+    # each, vs self_harm ~1.5k). Capping them speeds up moderation fine-tuning AND
+    # improves balance for the sparse labels — a row is kept only while at least
+    # one of its risk labels is still under the cap. hate+toxicity share a budget
+    # since ToxiGen labels both on the same text.
+    if args.max_per_risk_label and args.max_per_risk_label > 0:
+        rng.shuffle(risk_records)
+        cap = args.max_per_risk_label
+        shared = {C.HATE: "hate_tox", C.TOXICITY: "hate_tox"}
+        def _key(lab: str) -> str:
+            return shared.get(lab, lab)
+        written: Counter = Counter()
+        capped: list[dict] = []
+        for rec in risk_records:
+            risk = [lab for lab in rec.get("labels", []) if lab in _RISK]
+            if any(written[_key(lab)] < cap for lab in risk):
+                capped.append(rec)
+                for lab in risk:
+                    written[_key(lab)] += 1
+        print(f"Capped risk labels at {cap}: {len(risk_records)} -> {len(capped)} rows")
+        risk_records = capped
 
     final = risk_records + kept_safe
     rng.shuffle(final)
