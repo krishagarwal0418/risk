@@ -179,12 +179,16 @@ def finetune(
             loss = loss_fct(outputs.logits, labels.float())
             return (loss, outputs) if return_outputs else loss
 
+    use_cuda = torch.cuda.is_available()
     args = TrainingArguments(
         output_dir=output_dir,
         num_train_epochs=epochs,
         per_device_train_batch_size=batch_size,
         per_device_eval_batch_size=batch_size,
         learning_rate=lr,
+        # Mixed precision on GPU: ~2x faster on a T4 with negligible quality impact.
+        fp16=use_cuda,
+        dataloader_num_workers=2,
         # Step-based save/eval so a crash or disconnect only loses the steps since
         # the last checkpoint (not the whole run). save_total_limit caps disk use.
         eval_strategy="steps",
