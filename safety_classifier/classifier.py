@@ -24,17 +24,31 @@ from .transformers_layer.toxic_fallback import ToxicFallbackClassifier
 
 
 def _model_source(entry: dict[str, Any], backend: str) -> str:
-    """Resolve the path/id to load for a model given the backend."""
+    """Resolve the path/id to load for a model given the backend.
+
+    Priority:
+      1. Fine-tuned model weights (if present)
+      2. ONNX (FP32 preferred; INT8 discouraged due to quantization artifacts)
+      3. Local PyTorch weights
+      4. HuggingFace model ID (auto-download)
+    """
+    # Check for fine-tuned weights first (highest priority).
+    finetuned_key = entry.get("finetuned_path")
+    if finetuned_key:
+        p = resolve_path(finetuned_key)
+        if p.exists():
+            return str(p)
+
     if backend == "onnx_int8":
-        p = resolve_path(entry["int8_path"])
+        p = resolve_path(entry.get("int8_path", ""))
         if p.exists():
             return str(p)
     if backend in ("onnx", "onnx_int8"):
-        p = resolve_path(entry["onnx_path"])
+        p = resolve_path(entry.get("onnx_path", ""))
         if p.exists():
             return str(p)
     # Prefer a local PyTorch download if present, else the HF id.
-    local = resolve_path(entry["local_path"])
+    local = resolve_path(entry.get("local_path", ""))
     if local.exists():
         return str(local)
     return entry["hf_name"]

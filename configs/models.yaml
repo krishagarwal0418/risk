@@ -21,6 +21,7 @@ transformers:
 
   moderation_primary:
     hf_name: oxyapi/albert-moderation-001
+    finetuned_path: models/finetuned/moderation
     local_path: models/transformers/oxyapi_moderation
     onnx_path: models/onnx/oxyapi_moderation
     int8_path: models/onnx_int8/oxyapi_moderation

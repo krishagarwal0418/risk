@@ -2,10 +2,9 @@
 
 runtime:
   device: cuda          # cuda | cpu  (falls back to cpu automatically if cuda missing)
-  backend: pytorch      # pytorch | onnx | onnx_int8
+  backend: pytorch      # pytorch | onnx (INT8 not recommended — quantization artifacts)
   use_fasttext: true
-  use_onnx: false
-  use_int8: false
+  use_onnx: false       # Set to true to use FP32 ONNX (not INT8)
   full_scan_default: false
   enable_toxic_fallback: false
   moderation_backend: oxyapi  # oxyapi (primary, best_F1=0.648) | moderationbert | tinysafe
