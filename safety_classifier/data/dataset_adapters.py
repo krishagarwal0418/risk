@@ -215,19 +215,50 @@ def adapt_moderation_410k(rows: Iterable[dict], source: str) -> Iterator[Unified
         yield _rec(text, labels, source)
 
 
+# wildguardmix subcategory (substring) -> canonical labels. Ordered: first match
+# wins. Misinformation subcategories have no canonical home and fall to unknown.
+_WILDGUARD_SUBCATEGORY_MAP: tuple[tuple[str, list[str]], ...] = (
+    ("toxic_language_hate_speech", [C.HATE, C.TOXICITY]),
+    ("social_stereotypes_and_unfair_discrimination", [C.HATE]),
+    ("violence_and_physical_harm", [C.VIOLENCE]),
+    ("sexual_content", [C.SEXUAL]),
+    ("mental_health", [C.SELF_HARM]),
+    ("fraud_assisting_illegal_activities", [C.ILLEGAL_ACTIVITY]),
+    ("copyright_violations", [C.ILLEGAL_ACTIVITY]),
+    ("private_information", [C.ILLEGAL_ACTIVITY]),
+    ("sensitive_information_organization_government", [C.DANGEROUS_INFORMATION]),
+    ("cyberattack", [C.DANGEROUS_INFORMATION]),
+    ("defamation", [C.HARASSMENT]),
+)
+
+
 def adapt_wildguard(rows: Iterable[dict], source: str) -> Iterator[UnifiedRecord]:
-    """allenai/wildguardmix: ``prompt_harm_label`` harmful/unharmful."""
+    """allenai/wildguardmix (wildguardtrain).
+
+    Schema: ``prompt``, ``adversarial``, ``prompt_harm_label`` (harmful/unharmful),
+    ``subcategory`` (rich harm taxonomy). The old adapter dumped every harmful row
+    to ``unknown``, throwing away ~46k labeled examples. We now map ``subcategory``
+    to canonical labels, which feeds exactly the sparse classes (self_harm,
+    dangerous_information, sexual, violence). unharmful -> safe; harmful with an
+    unmappable subcategory (misinformation / generic 'others') -> unknown.
+    """
     for row in rows:
         text = row.get("prompt") or _first_text(row)
         if not text:
             continue
-        harm = str(row.get("prompt_harm_label", "")).lower()
-        if harm == "harmful":
-            yield _rec(text, [C.UNKNOWN], source)
-        elif harm == "unharmful":
+        harm = str(row.get("prompt_harm_label", "")).strip().lower()
+        if harm == "unharmful":
             yield _rec(text, [C.SAFE], source)
-        else:
-            yield _rec(text, [C.SAFE], source)
+            continue
+        if harm != "harmful":
+            continue  # missing/ambiguous label -> skip rather than guess
+        sub = str(row.get("subcategory", "") or "").strip().lower()
+        labels: list[str] = []
+        for key, mapped in _WILDGUARD_SUBCATEGORY_MAP:
+            if key in sub:
+                labels = list(mapped)
+                break
+        yield _rec(text, labels or [C.UNKNOWN], source)
 
 
 def adapt_beavertails(rows: Iterable[dict], source: str) -> Iterator[UnifiedRecord]:
@@ -476,76 +507,32 @@ def adapt_harmful_prompts(rows: Iterable[dict], source: str) -> Iterator[Unified
 def adapt_sorry_bench(rows: Iterable[dict], source: str) -> Iterator[UnifiedRecord]:
     """sorry-bench/sorry-bench-202406.
 
-    Schema: ``prompt``, ``category`` (int 1-45 mapping to harm sub-categories),
-    ``category_original`` or ``category_name`` (string label if present).
-    All SORRY-Bench prompts are harmful by design — we map the category.
+    Real schema (verified): ``question_id``, ``category`` (opaque '1'-'45'),
+    ``turns`` (list — the prompt is ``turns[0]``), ``prompt_style``. The numeric
+    45-category taxonomy is not reliably mappable from the id alone, so rather than
+    fabricate a mapping we derive labels from the prompt CONTENT via the keyword
+    labeler. Every SORRY-Bench prompt is harmful by construction, so a keyword miss
+    falls back to 'unknown' (never 'safe').
     """
-    # Category ID ranges → external label (based on published taxonomy).
-    # 1-8:  weapons/CBRN/cybercrime → dangerous_information
-    # 9-12: fraud/illegal → illegal_activity
-    # 13-16: self harm / suicide → self_harm
-    # 17-20: adult/sexual → sexual
-    # 21-24: hate/discrimination → hate
-    # 25-28: violence/threats → violence
-    # 29+:   misc harmful → unknown
-    _name_map = {
-        "chemical": "dangerous_information",
-        "biological": "dangerous_information",
-        "radiological": "dangerous_information",
-        "nuclear": "dangerous_information",
-        "cybercrime": "dangerous_information",
-        "weapon": "dangerous_information",
-        "illegal": "illegal_activity",
-        "fraud": "illegal_activity",
-        "drug": "dangerous_information",
-        "suicide": "self_harm",
-        "self-harm": "self_harm",
-        "self harm": "self_harm",
-        "eating disorder": "self_harm",
-        "sexual": "sexual",
-        "adult": "sexual",
-        "pornograph": "sexual",
-        "hate": "hate",
-        "discriminat": "hate",
-        "harassment": "harassment",
-        "stalk": "harassment",
-        "violence": "violence",
-        "threat": "violence",
-        "murder": "violence",
-        "human traffick": "illegal_activity",
-    }
+    import ast
+
     for row in rows:
-        text = row.get("prompt") or _first_text(row)
-        if not text:
-            continue
-        cat_name = str(
-            row.get("category_original") or row.get("category_name") or ""
-        ).strip().lower()
-        label = next((v for k, v in _name_map.items() if k in cat_name), None)
-        if label is None and not cat_name and row.get("category") is None:
-            yield _rec(text, _harmful_prompt_labels(text), source)
-            continue
-        if label is None:
-            # Fall back to numeric range.
+        turns = row.get("turns")
+        text: str | None = None
+        if isinstance(turns, list) and turns:
+            text = turns[0] if isinstance(turns[0], str) else None
+        elif isinstance(turns, str) and turns.strip().startswith("["):
             try:
-                cat_id = int(row.get("category") or 0)
-            except (ValueError, TypeError):
-                cat_id = 0
-            if 1 <= cat_id <= 8:
-                label = "dangerous_information"
-            elif 9 <= cat_id <= 12:
-                label = "illegal_activity"
-            elif 13 <= cat_id <= 16:
-                label = "self_harm"
-            elif 17 <= cat_id <= 20:
-                label = "sexual"
-            elif 21 <= cat_id <= 24:
-                label = "hate"
-            elif 25 <= cat_id <= 28:
-                label = "violence"
-            else:
-                label = C.UNKNOWN
-        yield _rec(text, [label], source)
+                parsed = ast.literal_eval(turns)
+                if isinstance(parsed, list) and parsed:
+                    text = parsed[0]
+            except (ValueError, SyntaxError):
+                text = None
+        if not text:
+            text = _first_text(row)
+        if not text or not isinstance(text, str) or not text.strip():
+            continue
+        yield _rec(text, _harmful_prompt_labels(text), source)
 
 
 def adapt_generic(rows: Iterable[dict], source: str) -> Iterator[UnifiedRecord]:
