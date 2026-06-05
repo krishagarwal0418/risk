@@ -31,11 +31,13 @@ datasets:
     kind: jailbreak
     enabled: true
 
+  # Harelix/Prompt-Injection-Mixed-Techniques-2024 was removed from the Hub (404).
+  # rogue_injection_benchmark above covers the same mixed/indirect-injection ground.
   - name: harelix_prompt_injection_mixed
     loader: hf
     hf_name: Harelix/Prompt-Injection-Mixed-Techniques-2024
     kind: prompt_injection
-    enabled: true
+    enabled: false
 
   - name: salad_data
     loader: hf
@@ -118,11 +120,13 @@ datasets:
     loader: hf
     hf_name: sorry-bench/sorry-bench-202406
     kind: sorry_bench
-    enabled: false   # gated - disabled
+    enabled: true    # gated (gated=auto) - works once HF_TOKEN is set
 
+  # allenai/malicious-instruct is 404; walledai/MaliciousInstruct is the live
+  # mirror (100 harmful prompts, single 'prompt' column, all positive).
   - name: malicious_instruct
     loader: hf
-    hf_name: allenai/malicious-instruct
+    hf_name: walledai/MaliciousInstruct
     kind: harmful_prompts
     enabled: true
 
