@@ -88,7 +88,15 @@ def main() -> None:
             "--device", "cuda", "--batch-size", "64"
         ], False),
 
-        ("09. Fine-tune moderation model", [
+        ("09a. Fine-tune prompt injection model", [
+            sys.executable, str(root / "scripts" / "09a_finetune_prompt_injection.py"),
+            "--device", "cuda",
+            "--batch-size", str(args.batch_size),
+            "--epochs", str(args.epochs),
+            "--lr", "2e-5"
+        ], args.skip_finetuning),
+
+        ("09b. Fine-tune moderation model", [
             sys.executable, str(root / "scripts" / "09_finetune_moderation.py"),
             "--device", "cuda",
             "--batch-size", str(args.batch_size),

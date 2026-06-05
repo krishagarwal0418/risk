@@ -9,6 +9,7 @@ fasttext:
 transformers:
   prompt_injection:
     hf_name: fmops/distilbert-prompt-injection
+    finetuned_path: models/finetuned/prompt_injection
     local_path: models/transformers/prompt_injection
     onnx_path: models/onnx/prompt_injection
     int8_path: models/onnx_int8/prompt_injection
