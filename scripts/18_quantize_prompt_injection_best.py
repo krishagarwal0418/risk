@@ -48,6 +48,35 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
+def _load_tokenizer(source: str | Path):
+    from transformers import AutoTokenizer
+
+    try:
+        return AutoTokenizer.from_pretrained(str(source), fix_mistral_regex=True)
+    except TypeError:
+        return AutoTokenizer.from_pretrained(str(source))
+
+
+def _ort_provider(requested: str) -> str | None:
+    if requested == "cpu":
+        return "CPUExecutionProvider"
+    if requested == "cuda":
+        return "CUDAExecutionProvider"
+    if requested != "auto":
+        return requested
+    try:
+        import onnxruntime as ort
+
+        providers = ort.get_available_providers()
+        if "CUDAExecutionProvider" in providers:
+            return "CUDAExecutionProvider"
+        if "CPUExecutionProvider" in providers:
+            return "CPUExecutionProvider"
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
 def _sample_rows(rows: list[dict[str, Any]], limit: int, seed: int) -> list[dict[str, Any]]:
     if not limit or len(rows) <= limit:
         return rows
@@ -178,7 +207,7 @@ def summarize_scores(y: list[int], scores: list[float]) -> dict[str, Any]:
 
 def build_clean_hf_dir(base_model: str, weights: Path, out_dir: Path) -> dict[str, Any]:
     from safetensors import safe_open
-    from transformers import AutoConfig, AutoTokenizer
+    from transformers import AutoConfig
 
     out_dir.mkdir(parents=True, exist_ok=True)
     with safe_open(str(weights), framework="pt", device="cpu") as fh:
@@ -194,19 +223,18 @@ def build_clean_hf_dir(base_model: str, weights: Path, out_dir: Path) -> dict[st
     cfg.id2label = {0: "SAFE", 1: "INJECTION"}
     cfg.label2id = {"SAFE": 0, "INJECTION": 1}
     cfg.save_pretrained(out_dir)
-    AutoTokenizer.from_pretrained(base_model).save_pretrained(out_dir)
+    _load_tokenizer(base_model).save_pretrained(out_dir)
     shutil.copy2(weights, out_dir / "model.safetensors")
     return {"path": str(out_dir), "base_model": base_model, "weights": str(weights)}
 
 
 def export_fp32_onnx(hf_dir: Path, out_dir: Path) -> dict[str, Any]:
     from optimum.onnxruntime import ORTModelForSequenceClassification
-    from transformers import AutoTokenizer
 
     out_dir.mkdir(parents=True, exist_ok=True)
     model = ORTModelForSequenceClassification.from_pretrained(str(hf_dir), export=True)
     model.save_pretrained(str(out_dir))
-    AutoTokenizer.from_pretrained(str(hf_dir)).save_pretrained(str(out_dir))
+    _load_tokenizer(hf_dir).save_pretrained(str(out_dir))
     return {"path": str(out_dir), "size_bytes": file_size(out_dir)}
 
 
@@ -246,12 +274,19 @@ def quantize_candidate(fp32_dir: Path, out_dir: Path, *, weight_type: str, per_c
     }
 
 
-def eval_pytorch(hf_dir: Path, rows: list[dict[str, Any]], batch_size: int, device: str) -> dict[str, Any]:
+def eval_pytorch(
+    hf_dir: Path,
+    rows: list[dict[str, Any]],
+    batch_size: int,
+    device: str,
+    progress_label: str,
+    progress_every: int,
+) -> dict[str, Any]:
     import numpy as np
     import torch
-    from transformers import AutoModelForSequenceClassification, AutoTokenizer
+    from transformers import AutoModelForSequenceClassification
 
-    tokenizer = AutoTokenizer.from_pretrained(str(hf_dir))
+    tokenizer = _load_tokenizer(hf_dir)
     model = AutoModelForSequenceClassification.from_pretrained(str(hf_dir))
     if device == "cuda":
         model = model.to("cuda")
@@ -277,6 +312,9 @@ def eval_pytorch(hf_dir: Path, rows: list[dict[str, Any]], batch_size: int, devi
             latencies.append((time.perf_counter() - start) * 1000 / max(len(chunk), 1))
             probs = torch.softmax(logits.detach().cpu(), dim=-1)[:, 1]
             scores.extend(float(x) for x in probs)
+            done = min(i + len(chunk), len(rows))
+            if progress_every and (done % progress_every == 0 or done == len(rows)):
+                print(f"[quant] {progress_label}: scored {done}/{len(rows)}", flush=True)
     y = [int(r["label"]) for r in rows]
     return {
         "scores": scores,
@@ -287,13 +325,23 @@ def eval_pytorch(hf_dir: Path, rows: list[dict[str, Any]], batch_size: int, devi
     }
 
 
-def eval_ort(model_dir: Path, rows: list[dict[str, Any]], batch_size: int) -> dict[str, Any]:
+def eval_ort(
+    model_dir: Path,
+    rows: list[dict[str, Any]],
+    batch_size: int,
+    provider: str | None,
+    progress_label: str,
+    progress_every: int,
+) -> dict[str, Any]:
     import numpy as np
     from optimum.onnxruntime import ORTModelForSequenceClassification
-    from transformers import AutoTokenizer
 
-    tokenizer = AutoTokenizer.from_pretrained(str(model_dir))
-    model = ORTModelForSequenceClassification.from_pretrained(str(model_dir))
+    tokenizer = _load_tokenizer(model_dir)
+    if provider:
+        print(f"[quant] {progress_label}: ORT provider={provider}")
+        model = ORTModelForSequenceClassification.from_pretrained(str(model_dir), provider=provider)
+    else:
+        model = ORTModelForSequenceClassification.from_pretrained(str(model_dir))
     scores: list[float] = []
     latencies: list[float] = []
     for i in range(0, len(rows), batch_size):
@@ -311,6 +359,9 @@ def eval_ort(model_dir: Path, rows: list[dict[str, Any]], batch_size: int) -> di
         exp = np.exp(logits - np.max(logits, axis=1, keepdims=True))
         probs = exp / np.sum(exp, axis=1, keepdims=True)
         scores.extend(float(x) for x in probs[:, 1])
+        done = min(i + len(chunk), len(rows))
+        if progress_every and (done % progress_every == 0 or done == len(rows)):
+            print(f"[quant] {progress_label}: scored {done}/{len(rows)}", flush=True)
     y = [int(r["label"]) for r in rows]
     return {
         "scores": scores,
@@ -364,6 +415,12 @@ def main() -> None:
     parser.add_argument("--skip-export", action="store_true")
     parser.add_argument("--skip-pytorch", action="store_true",
                         help="Use FP32 ONNX as reference instead of PyTorch")
+    parser.add_argument("--ort-provider", default="auto",
+                        help="ONNXRuntime provider: auto, cuda, cpu, or explicit provider name")
+    parser.add_argument("--progress-every", type=int, default=1000,
+                        help="Print eval progress every N scored rows; 0 disables")
+    parser.add_argument("--candidates", default="all",
+                        help="Comma-separated candidate names, or all")
     args = parser.parse_args()
 
     root = repo_root()
@@ -372,6 +429,7 @@ def main() -> None:
     hf_dir = root / args.hf_dir
     fp32_dir = root / args.fp32_dir
     int8_root = root / args.int8_root
+    ort_provider = _ort_provider(args.ort_provider)
 
     rows = _sample_rows(_read_jsonl(data_path), args.limit, args.seed)
     y_counts = Counter(int(r["label"]) for r in rows)
@@ -389,15 +447,24 @@ def main() -> None:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     if args.skip_pytorch:
         print("[quant] evaluating FP32 ONNX reference")
-        reference = eval_ort(fp32_dir, rows, args.batch_size)
+        reference = eval_ort(
+            fp32_dir, rows, args.batch_size, ort_provider,
+            "fp32_onnx_reference", args.progress_every,
+        )
         reference_name = "fp32_onnx"
     else:
         print(f"[quant] evaluating PyTorch reference on {device}")
-        reference = eval_pytorch(hf_dir, rows, args.batch_size, device)
+        reference = eval_pytorch(
+            hf_dir, rows, args.batch_size, device,
+            "pytorch_reference", args.progress_every,
+        )
         reference_name = "pytorch"
 
     print("[quant] evaluating FP32 ONNX")
-    fp32_eval = eval_ort(fp32_dir, rows, args.batch_size)
+    fp32_eval = eval_ort(
+        fp32_dir, rows, args.batch_size, ort_provider,
+        "fp32_onnx", args.progress_every,
+    )
     fp32_cmp = compare_to_reference(fp32_eval, reference)
 
     candidate_specs = {
@@ -406,13 +473,25 @@ def main() -> None:
         "int8_quint8": {"weight_type": "quint8", "per_channel": False},
         "int8_quint8_per_channel": {"weight_type": "quint8", "per_channel": True},
     }
+    if args.candidates != "all":
+        requested = {name.strip() for name in args.candidates.split(",") if name.strip()}
+        unknown = sorted(requested - set(candidate_specs))
+        if unknown:
+            raise SystemExit(f"Unknown candidates: {unknown}; valid={sorted(candidate_specs)}")
+        candidate_specs = {
+            name: spec for name, spec in candidate_specs.items()
+            if name in requested
+        }
     candidates: dict[str, Any] = {}
     for name, spec in candidate_specs.items():
         out_dir = int8_root / name
         print(f"[quant] quantizing {name} -> {out_dir}")
         q_info = quantize_candidate(fp32_dir, out_dir, **spec)
         print(f"[quant] evaluating {name}")
-        q_eval = eval_ort(out_dir, rows, args.batch_size)
+        q_eval = eval_ort(
+            out_dir, rows, args.batch_size, ort_provider,
+            name, args.progress_every,
+        )
         candidates[name] = {
             **q_info,
             "metrics": q_eval["metrics"],
