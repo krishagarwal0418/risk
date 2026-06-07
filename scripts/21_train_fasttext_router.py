@@ -226,6 +226,11 @@ def main() -> None:
     ap.add_argument("--dim", type=int, default=100)
     ap.add_argument("--wordNgrams", type=int, default=2)
     ap.add_argument("--lr", type=float, default=0.5)
+    ap.add_argument("--bucket", type=int, default=2_000_000,
+                    help="N-gram hash buckets. Bigger = fewer collisions (uses more "
+                         "RAM): ~2M default; try 8M-20M with wordNgrams=3.")
+    ap.add_argument("--thread", type=int, default=0,
+                    help="Training threads (0 = all cores).")
     ap.add_argument("--quantize-retrain", action="store_true", default=False,
                     help="Retrain during quantization (slower, slightly smaller .ftz)")
     ap.add_argument("--seed", type=int, default=13)
@@ -241,11 +246,18 @@ def main() -> None:
         build(args.per_route_cap, args.include_civil, args.civil_max, args.seed)
 
     print("\n[router] training ...")
-    model = fasttext.train_supervised(
+    import os as _os
+    train_kwargs = dict(
         input=str(OUT_DIR / "train.txt"),
         loss="ova", epoch=args.epoch, dim=args.dim,
         wordNgrams=args.wordNgrams, lr=args.lr, minn=2, maxn=5,
+        bucket=args.bucket,
     )
+    if args.thread > 0:
+        train_kwargs["thread"] = args.thread
+    print(f"[router] bucket={args.bucket:,} dim={args.dim} epoch={args.epoch} "
+          f"wordNgrams={args.wordNgrams} threads={args.thread or _os.cpu_count()}")
+    model = fasttext.train_supervised(**train_kwargs)
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
     bin_path = MODEL_DIR / "router_head.bin"
     ftz_path = MODEL_DIR / "router_head.ftz"
