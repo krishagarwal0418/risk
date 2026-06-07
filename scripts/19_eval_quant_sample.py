@@ -19,20 +19,43 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
+import tempfile
 import time
+from pathlib import Path
 
 import numpy as np
 import torch
 from sklearn.metrics import average_precision_score, roc_auc_score
-from transformers import AutoTokenizer
+from transformers import AutoConfig, AutoTokenizer
 from optimum.onnxruntime import ORTModelForSequenceClassification
+
+
+def _resolve_model_dir(model_path: str, base: str) -> str:
+    """Return a directory optimum can load. If given a loose .onnx file, build a
+    temp dir with that file as model.onnx + a config.json copied from `base`."""
+    p = Path(model_path)
+    if p.is_dir():
+        return str(p)
+    if p.is_file():
+        tmp = Path(tempfile.mkdtemp(prefix="ort_eval_"))
+        link = tmp / "model.onnx"
+        try:
+            os.symlink(p.resolve(), link)
+        except OSError:
+            import shutil
+            shutil.copy2(p, link)
+        AutoConfig.from_pretrained(base).save_pretrained(tmp)
+        print(f"[eval] wrapped loose ONNX into temp dir: {tmp}")
+        return str(tmp)
+    raise FileNotFoundError(f"--model path not found: {model_path}")
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model-dir", required=True,
-                    help="Directory containing model.onnx + config.json")
+    ap.add_argument("--model", "--model-dir", dest="model", required=True,
+                    help="A model directory OR a loose model.onnx file")
     ap.add_argument("--data", default="data/prompt_injection_best/test.jsonl")
     ap.add_argument("--base", default="protectai/deberta-v3-base-prompt-injection-v2",
                     help="Tokenizer source (used if the dir has no tokenizer)")
@@ -45,9 +68,11 @@ def main() -> None:
     args = ap.parse_args()
 
     provider = "CUDAExecutionProvider" if args.provider == "cuda" else "CPUExecutionProvider"
-    model = ORTModelForSequenceClassification.from_pretrained(args.model_dir, provider=provider)
+    model_dir = _resolve_model_dir(args.model, args.base)
+    model = ORTModelForSequenceClassification.from_pretrained(
+        model_dir, provider=provider, file_name="model.onnx", export=False)
     try:
-        tok = AutoTokenizer.from_pretrained(args.model_dir)
+        tok = AutoTokenizer.from_pretrained(model_dir)
     except Exception:
         tok = AutoTokenizer.from_pretrained(args.base)
     padding = "max_length" if args.pad == "max" else True
@@ -60,7 +85,7 @@ def main() -> None:
     gold = [int(r["label"]) for r in rows]
     pos = sum(gold)
 
-    print(f"model dir: {args.model_dir}")
+    print(f"model: {args.model}")
     print(f"provider:  {provider} | pad: {args.pad} | max_len: {args.max_length}")
     print(f"sample:    {len(rows)} random rows ({pos} injection / {len(gold)-pos} safe)\n")
 
