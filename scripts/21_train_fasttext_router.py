@@ -143,7 +143,10 @@ def build(per_route_cap: int, include_civil: bool, civil_max: int, seed: int) ->
 
 
 def _predict_scores(model, text):
-    labels, probs = model.predict(text.replace("\n", " "), k=-1)
+    # Use the NumPy-2-safe predict helper (model.predict() crashes under NumPy 2
+    # with "Unable to avoid copy while creating an array").
+    from safety_classifier.fasttext_layer.compat import predict_fasttext
+    labels, probs = predict_fasttext(model, text.replace("\n", " "), k=-1)
     d = {"attack": 0.0, "moderation": 0.0, "safe": 0.0}
     for lab, p in zip(labels, probs):
         d[lab[len("__label__"):]] = float(p)
@@ -235,6 +238,9 @@ def main() -> None:
                     help="Retrain during quantization (slower, slightly smaller .ftz)")
     ap.add_argument("--seed", type=int, default=13)
     ap.add_argument("--skip-build", action="store_true")
+    ap.add_argument("--skip-train", action="store_true",
+                    help="Load the already-trained router_head.ftz and just evaluate "
+                         "(no retraining).")
     args = ap.parse_args()
 
     import fasttext
@@ -245,48 +251,54 @@ def main() -> None:
         print("[router] building data (processed + real-world civil_comments) ...")
         build(args.per_route_cap, args.include_civil, args.civil_max, args.seed)
 
-    print("\n[router] training ...")
     import os as _os
-    train_kwargs = dict(
-        input=str(OUT_DIR / "train.txt"),
-        loss="ova", epoch=args.epoch, dim=args.dim,
-        wordNgrams=args.wordNgrams, lr=args.lr, minn=2, maxn=5,
-        bucket=args.bucket,
-    )
-    if args.thread > 0:
-        train_kwargs["thread"] = args.thread
-    print(f"[router] bucket={args.bucket:,} dim={args.dim} epoch={args.epoch} "
-          f"wordNgrams={args.wordNgrams} threads={args.thread or _os.cpu_count()}", flush=True)
-    print("[router] FastText's % bar uses \\r and won't render in Colab — "
-          "heartbeat below confirms it's alive.", flush=True)
-
-    # Heartbeat: FastText's progress bar is invisible in notebooks, so print an
-    # elapsed-time line every 30s in a background thread so the run never looks hung.
-    import threading
-    import time as _time
-    _stop = threading.Event()
-
-    def _heartbeat():
-        t0 = _time.time()
-        while not _stop.wait(30):
-            print(f"[router] still training... {int(_time.time() - t0)}s elapsed", flush=True)
-
-    hb = threading.Thread(target=_heartbeat, daemon=True)
-    hb.start()
-    try:
-        model = fasttext.train_supervised(**train_kwargs)
-    finally:
-        _stop.set()
-    print("[router] training done; quantizing ...", flush=True)
-
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
     bin_path = MODEL_DIR / "router_head.bin"
     ftz_path = MODEL_DIR / "router_head.ftz"
-    model.save_model(str(bin_path))
-    model.quantize(input=str(OUT_DIR / "train.txt"), qnorm=True,
-                   retrain=args.quantize_retrain, cutoff=100000)
-    model.save_model(str(ftz_path))
-    print(f"[router] saved {ftz_path} ({ftz_path.stat().st_size//1024} KB)")
+
+    if args.skip_train:
+        # Load the already-trained model and just (re-)evaluate.
+        load_path = ftz_path if ftz_path.exists() else bin_path
+        print(f"[router] --skip-train: loading {load_path}")
+        model = fasttext.load_model(str(load_path))
+    else:
+        print("\n[router] training ...")
+        train_kwargs = dict(
+            input=str(OUT_DIR / "train.txt"),
+            loss="ova", epoch=args.epoch, dim=args.dim,
+            wordNgrams=args.wordNgrams, lr=args.lr, minn=2, maxn=5,
+            bucket=args.bucket,
+        )
+        if args.thread > 0:
+            train_kwargs["thread"] = args.thread
+        print(f"[router] bucket={args.bucket:,} dim={args.dim} epoch={args.epoch} "
+              f"wordNgrams={args.wordNgrams} threads={args.thread or _os.cpu_count()}", flush=True)
+        print("[router] FastText's % bar uses \\r and won't render in Colab — "
+              "heartbeat below confirms it's alive.", flush=True)
+
+        # Heartbeat: FastText's progress bar is invisible in notebooks, so print an
+        # elapsed-time line every 30s from a daemon thread so it never looks hung.
+        import threading
+        import time as _time
+        _stop = threading.Event()
+
+        def _heartbeat():
+            t0 = _time.time()
+            while not _stop.wait(30):
+                print(f"[router] still training... {int(_time.time() - t0)}s elapsed", flush=True)
+
+        hb = threading.Thread(target=_heartbeat, daemon=True)
+        hb.start()
+        try:
+            model = fasttext.train_supervised(**train_kwargs)
+        finally:
+            _stop.set()
+        print("[router] training done; quantizing ...", flush=True)
+        model.save_model(str(bin_path))
+        model.quantize(input=str(OUT_DIR / "train.txt"), qnorm=True,
+                       retrain=args.quantize_retrain, cutoff=100000)
+        model.save_model(str(ftz_path))
+        print(f"[router] saved {ftz_path} ({ftz_path.stat().st_size//1024} KB)")
 
     route_thr = evaluate(model, OUT_DIR / "test.txt")
     (repo_root() / "reports").mkdir(exist_ok=True)
