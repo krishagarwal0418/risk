@@ -256,8 +256,29 @@ def main() -> None:
     if args.thread > 0:
         train_kwargs["thread"] = args.thread
     print(f"[router] bucket={args.bucket:,} dim={args.dim} epoch={args.epoch} "
-          f"wordNgrams={args.wordNgrams} threads={args.thread or _os.cpu_count()}")
-    model = fasttext.train_supervised(**train_kwargs)
+          f"wordNgrams={args.wordNgrams} threads={args.thread or _os.cpu_count()}", flush=True)
+    print("[router] FastText's % bar uses \\r and won't render in Colab — "
+          "heartbeat below confirms it's alive.", flush=True)
+
+    # Heartbeat: FastText's progress bar is invisible in notebooks, so print an
+    # elapsed-time line every 30s in a background thread so the run never looks hung.
+    import threading
+    import time as _time
+    _stop = threading.Event()
+
+    def _heartbeat():
+        t0 = _time.time()
+        while not _stop.wait(30):
+            print(f"[router] still training... {int(_time.time() - t0)}s elapsed", flush=True)
+
+    hb = threading.Thread(target=_heartbeat, daemon=True)
+    hb.start()
+    try:
+        model = fasttext.train_supervised(**train_kwargs)
+    finally:
+        _stop.set()
+    print("[router] training done; quantizing ...", flush=True)
+
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
     bin_path = MODEL_DIR / "router_head.bin"
     ftz_path = MODEL_DIR / "router_head.ftz"
