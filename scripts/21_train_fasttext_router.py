@@ -114,12 +114,20 @@ def build(per_route_cap: int, include_civil: bool, civil_max: int, seed: int) ->
             print(f"  [{split}] +civil: {sum(1 for r in civ if r[0]==['moderation'])} mod, "
                   f"{sum(1 for r in civ if r[0]==['safe'])} safe")
 
-        # Balance: keep ALL attack (minority route); cap moderation + safe.
-        cap = per_route_cap if split == "train" else max(per_route_cap // 8, 1)
-        rng.shuffle(mod); rng.shuffle(safe)
-        # don't let moderation/safe drown attack: cap at max(cap, 2x attack)
-        route_cap = max(cap, len(attack) * 2)
-        kept = attack + mod[:route_cap] + safe[:route_cap]
+        # Balance the routes. attack is the minority (~12k) vs moderation/safe.
+        is_train = split == "train"
+        cap = per_route_cap if is_train else max(per_route_cap // 8, 1)
+        rng.shuffle(attack); rng.shuffle(mod); rng.shuffle(safe)
+        mod_k, safe_k = mod[:cap], safe[:cap]
+        if is_train:
+            # Oversample attack (duplicate lines) up to ~1/3 of the larger routes
+            # so it isn't drowned. TRAIN only — val/test stay natural for honest eval.
+            target = min(cap, max(len(attack), (len(mod_k) + len(safe_k)) // 3))
+            reps = (target // max(len(attack), 1)) + 1
+            attack_k = (attack * reps)[:target]
+        else:
+            attack_k = attack
+        kept = attack_k + mod_k + safe_k
         rng.shuffle(kept)
 
         c = {"attack": 0, "moderation": 0, "safe": 0}
