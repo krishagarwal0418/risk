@@ -220,10 +220,14 @@ def main() -> None:
     ap.add_argument("--no-civil", dest="include_civil", action="store_false")
     ap.add_argument("--civil-max", type=int, default=40000,
                     help="Max civil_comments rows per class per split")
-    ap.add_argument("--epoch", type=int, default=50)
-    ap.add_argument("--dim", type=int, default=256)
-    ap.add_argument("--wordNgrams", type=int, default=3)
+    # Light defaults: a coarse 3-way router doesn't need transformer-grade settings.
+    # dim=100/epoch=25/wordNgrams=2 trains in minutes with ~the same routing recall.
+    ap.add_argument("--epoch", type=int, default=25)
+    ap.add_argument("--dim", type=int, default=100)
+    ap.add_argument("--wordNgrams", type=int, default=2)
     ap.add_argument("--lr", type=float, default=0.5)
+    ap.add_argument("--quantize-retrain", action="store_true", default=False,
+                    help="Retrain during quantization (slower, slightly smaller .ftz)")
     ap.add_argument("--seed", type=int, default=13)
     ap.add_argument("--skip-build", action="store_true")
     args = ap.parse_args()
@@ -245,7 +249,8 @@ def main() -> None:
     bin_path = MODEL_DIR / "router_head.bin"
     ftz_path = MODEL_DIR / "router_head.ftz"
     model.save_model(str(bin_path))
-    model.quantize(input=str(OUT_DIR / "train.txt"), qnorm=True, retrain=True, cutoff=100000)
+    model.quantize(input=str(OUT_DIR / "train.txt"), qnorm=True,
+                   retrain=args.quantize_retrain, cutoff=100000)
     model.save_model(str(ftz_path))
     print(f"[router] saved {ftz_path} ({ftz_path.stat().st_size//1024} KB)")
 
