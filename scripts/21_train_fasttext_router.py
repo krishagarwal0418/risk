@@ -233,7 +233,8 @@ def main() -> None:
     args = ap.parse_args()
 
     import fasttext
-    fasttext.FastText.eprint = lambda *a, **k: None
+    # NOTE: do NOT silence eprint here — we want the live "Progress: X%" bar so
+    # training is visible. (The load-time deprecation warning is harmless.)
 
     if not args.skip_build:
         print("[router] building data (processed + real-world civil_comments) ...")
