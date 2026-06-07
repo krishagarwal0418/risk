@@ -52,28 +52,78 @@ def _route_labels(rec_labels) -> list[str]:
     return out
 
 
-def build(safe_cap: int) -> dict:
+# civil_comments (real-world) float columns -> route. Any toxic col => moderation.
+_CIVIL_COLS = ("toxicity", "identity_attack", "insult", "threat", "sexual_explicit",
+               "severe_toxicity", "obscene")
+
+
+def _civil_route(row, thr=0.5) -> list[str]:
+    if any(row.get(c) is not None and float(row.get(c) or 0) >= thr for c in _CIVIL_COLS):
+        return ["moderation"]
+    return ["safe"]
+
+
+def _load_civil(split: str, max_rows: int, seed: int):
+    """Stream real-world civil_comments, return (route_labels, text) records."""
+    from datasets import load_dataset
+    hf_split = "train" if split == "train" else "test"
+    ds = load_dataset("google/civil_comments", split=hf_split, streaming=True)
+    mod, safe = [], []
+    cap = max_rows if split == "train" else max(max_rows // 8, 1)
+    for row in ds:
+        text = (row.get("text") or "").strip()
+        if not text or len(text) < 8 or len(text) > 2000:
+            continue
+        labs = _civil_route(row)
+        (mod if labs == ["moderation"] else safe).append((labs, text.replace("\n", " ")))
+        if len(mod) >= cap and len(safe) >= cap:
+            break
+    random.Random(seed).shuffle(safe)
+    return mod + safe[:cap]
+
+
+def build(per_route_cap: int, include_civil: bool, civil_max: int, seed: int) -> dict:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
+    rng = random.Random(seed)
     counts = {}
     for split in ("train", "val", "test"):
         inp = PROCESSED / f"all_{split}.jsonl"
         if not inp.exists():
             raise FileNotFoundError(f"missing {inp} (run 01 + 02 first)")
         rows = [json.loads(l) for l in inp.read_text(encoding="utf-8").splitlines() if l.strip()]
-        cap = safe_cap if split == "train" else max(safe_cap // 8, 1)
+
+        attack, mod, safe = [], [], []
+        for rec in rows:
+            labs = _route_labels(rec.get("labels", []))
+            if not labs:
+                continue
+            text = rec["text"].replace("\n", " ").strip()
+            if "attack" in labs:
+                attack.append((labs, text))
+            elif "moderation" in labs:
+                mod.append((labs, text))
+            elif labs == ["safe"]:
+                safe.append((labs, text))
+
+        # Add real-world civil_comments to moderation + safe pools.
+        if include_civil:
+            civ = _load_civil(split, civil_max, seed)
+            mod += [r for r in civ if r[0] == ["moderation"]]
+            safe += [r for r in civ if r[0] == ["safe"]]
+            print(f"  [{split}] +civil: {sum(1 for r in civ if r[0]==['moderation'])} mod, "
+                  f"{sum(1 for r in civ if r[0]==['safe'])} safe")
+
+        # Balance: keep ALL attack (minority route); cap moderation + safe.
+        cap = per_route_cap if split == "train" else max(per_route_cap // 8, 1)
+        rng.shuffle(mod); rng.shuffle(safe)
+        # don't let moderation/safe drown attack: cap at max(cap, 2x attack)
+        route_cap = max(cap, len(attack) * 2)
+        kept = attack + mod[:route_cap] + safe[:route_cap]
+        rng.shuffle(kept)
+
         c = {"attack": 0, "moderation": 0, "safe": 0}
-        safe_written = 0
-        out_path = OUT_DIR / f"{split}.txt"
-        with out_path.open("w", encoding="utf-8") as f:
-            for rec in rows:
-                labs = _route_labels(rec.get("labels", []))
-                if not labs:
-                    continue
-                if labs == ["safe"]:
-                    if safe_cap and safe_written >= cap:
-                        continue
-                    safe_written += 1
-                text = rec["text"].replace("\n", " ").strip()
+        with (OUT_DIR / f"{split}.txt").open("w", encoding="utf-8") as f:
+            for labs, text in kept:
                 prefix = " ".join(f"__label__{l}" for l in labs)
                 f.write(f"{prefix} {text}\n")
                 for l in labs:
@@ -154,11 +204,18 @@ def evaluate(model, test_path: Path):
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--safe-cap", type=int, default=40000)
+    ap.add_argument("--per-route-cap", type=int, default=60000,
+                    help="Cap moderation/safe rows per split (attack kept fully)")
+    ap.add_argument("--include-civil", action="store_true", default=True,
+                    help="Mix real-world civil_comments into moderation/safe")
+    ap.add_argument("--no-civil", dest="include_civil", action="store_false")
+    ap.add_argument("--civil-max", type=int, default=40000,
+                    help="Max civil_comments rows per class per split")
     ap.add_argument("--epoch", type=int, default=50)
     ap.add_argument("--dim", type=int, default=256)
     ap.add_argument("--wordNgrams", type=int, default=3)
     ap.add_argument("--lr", type=float, default=0.5)
+    ap.add_argument("--seed", type=int, default=13)
     ap.add_argument("--skip-build", action="store_true")
     args = ap.parse_args()
 
@@ -166,8 +223,8 @@ def main() -> None:
     fasttext.FastText.eprint = lambda *a, **k: None
 
     if not args.skip_build:
-        print("[router] building data ...")
-        build(args.safe_cap)
+        print("[router] building data (processed + real-world civil_comments) ...")
+        build(args.per_route_cap, args.include_civil, args.civil_max, args.seed)
 
     print("\n[router] training ...")
     model = fasttext.train_supervised(
