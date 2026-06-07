@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 """Evaluate a prompt-injection ONNX model on a random sample: accuracy + batch latency.
 
-Production serves in batches, so latency is measured as per-BATCH wall-time and its
-percentiles (p95/p99/max) across batches, for several batch sizes. Accuracy is
-computed once (it does not depend on batch size).
+Loads via optimum's ORTModelForSequenceClassification from a model DIRECTORY (the
+folder containing model.onnx + config.json), matching how the quant script saved
+them — raw onnxruntime.InferenceSession can fail on those exports.
+
+Production serves in batches, so latency is per-BATCH wall-time and its percentiles
+(p95/p99/max) across batches, swept over several batch sizes. Accuracy is computed
+once (it does not depend on batch size).
 
 Usage:
     python scripts/19_eval_quant_sample.py \
-        --model models/quant/prompt_injection_best/int8_quint8_per_channel/model.onnx \
-        --n 2000 --batch-sizes 1,8,16,32,64,128
+        --model-dir models/quant/prompt_injection_best/int8_quint8_per_channel \
+        --n 2000 --batch-sizes 32,64
 """
 
 from __future__ import annotations
@@ -19,36 +23,33 @@ import random
 import time
 
 import numpy as np
-import onnxruntime as ort
+import torch
 from sklearn.metrics import average_precision_score, roc_auc_score
 from transformers import AutoTokenizer
-
-
-def _softmax(x: np.ndarray) -> np.ndarray:
-    e = np.exp(x - x.max(axis=-1, keepdims=True))
-    return e / e.sum(axis=-1, keepdims=True)
+from optimum.onnxruntime import ORTModelForSequenceClassification
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model", required=True, help="Path to the ONNX model file")
+    ap.add_argument("--model-dir", required=True,
+                    help="Directory containing model.onnx + config.json")
     ap.add_argument("--data", default="data/prompt_injection_best/test.jsonl")
-    ap.add_argument("--base", default="protectai/deberta-v3-base-prompt-injection-v2")
+    ap.add_argument("--base", default="protectai/deberta-v3-base-prompt-injection-v2",
+                    help="Tokenizer source (used if the dir has no tokenizer)")
     ap.add_argument("--n", type=int, default=2000, help="Random sample size (0 = all)")
     ap.add_argument("--batch-sizes", default="1,8,16,32,64,128")
     ap.add_argument("--max-length", type=int, default=128)
     ap.add_argument("--seed", type=int, default=13)
     ap.add_argument("--provider", default="cpu", choices=["cpu", "cuda"])
-    ap.add_argument("--pad", default="dynamic", choices=["dynamic", "max"],
-                    help="dynamic = pad to longest in batch (realistic); "
-                         "max = always pad to max_length (worst-case)")
+    ap.add_argument("--pad", default="dynamic", choices=["dynamic", "max"])
     args = ap.parse_args()
 
-    providers = (["CUDAExecutionProvider", "CPUExecutionProvider"]
-                 if args.provider == "cuda" else ["CPUExecutionProvider"])
-    sess = ort.InferenceSession(args.model, providers=providers)
-    in_names = {i.name for i in sess.get_inputs()}
-    tok = AutoTokenizer.from_pretrained(args.base)
+    provider = "CUDAExecutionProvider" if args.provider == "cuda" else "CPUExecutionProvider"
+    model = ORTModelForSequenceClassification.from_pretrained(args.model_dir, provider=provider)
+    try:
+        tok = AutoTokenizer.from_pretrained(args.model_dir)
+    except Exception:
+        tok = AutoTokenizer.from_pretrained(args.base)
     padding = "max_length" if args.pad == "max" else True
 
     rows = [json.loads(l) for l in open(args.data, encoding="utf-8") if l.strip()]
@@ -59,17 +60,18 @@ def main() -> None:
     gold = [int(r["label"]) for r in rows]
     pos = sum(gold)
 
-    print(f"model:    {args.model}")
-    print(f"provider: {sess.get_providers()[0]}  | pad: {args.pad} | max_len: {args.max_length}")
-    print(f"sample:   {len(rows)} random rows ({pos} injection / {len(gold)-pos} safe)\n")
+    print(f"model dir: {args.model_dir}")
+    print(f"provider:  {provider} | pad: {args.pad} | max_len: {args.max_length}")
+    print(f"sample:    {len(rows)} random rows ({pos} injection / {len(gold)-pos} safe)\n")
 
+    @torch.inference_mode()
     def run_batch(batch_texts):
         enc = tok(batch_texts, truncation=True, padding=padding,
-                  max_length=args.max_length, return_tensors="np")
-        feed = {k: v for k, v in enc.items() if k in in_names}
-        return _softmax(sess.run(None, feed)[0])[:, 1]
+                  max_length=args.max_length, return_tensors="pt")
+        logits = model(**enc).logits
+        return torch.softmax(logits.float(), dim=-1)[:, 1].cpu().numpy()
 
-    # ---- Accuracy (computed once; batch size doesn't change it) ----
+    # ---- Accuracy (computed once) ----
     scores: list[float] = []
     for i in range(0, len(texts), 64):
         scores += run_batch(texts[i:i + 64]).tolist()
@@ -98,14 +100,12 @@ def main() -> None:
         pr, rc, f1 = m(r90)
         print(f"  @{r90} (~90% rec)  P={pr:.3f}  R={rc:.3f}  F1={f1:.3f}")
 
-    # ---- Latency sweep across batch sizes (per-batch wall-time) ----
+    # ---- Latency sweep (per-batch wall-time) ----
     batch_sizes = [int(b) for b in args.batch_sizes.split(",") if b.strip()]
     print(f"\n=== LATENCY by batch size ({args.provider}, per-batch wall-time) ===")
-    print(f"{'batch':>6} {'p50':>8} {'p95':>8} {'p99':>8} {'max':>8} {'mean':>8} "
-          f"{'rec/s':>9}")
+    print(f"{'batch':>6} {'p50':>8} {'p95':>8} {'p99':>8} {'max':>8} {'mean':>8} {'rec/s':>9}")
     for bs in batch_sizes:
-        # warmup
-        for _ in range(3):
+        for _ in range(3):  # warmup
             run_batch(texts[:bs])
         per_batch_ms, n_done = [], 0
         t_all = time.perf_counter()
@@ -117,10 +117,9 @@ def main() -> None:
             n_done += len(chunk)
         total_s = time.perf_counter() - t_all
         a = np.array(per_batch_ms)
-        thru = n_done / total_s
         print(f"{bs:>6} {np.percentile(a,50):>7.1f} {np.percentile(a,95):>7.1f} "
               f"{np.percentile(a,99):>7.1f} {a.max():>7.1f} {a.mean():>7.1f} "
-              f"{thru:>9.0f}")
+              f"{n_done/total_s:>9.0f}")
     print("\nNote: p95/p99/max are PER-BATCH latency; rec/s is overall throughput.")
 
 
