@@ -6,6 +6,7 @@ Supports multi-label classification with class weights and early stopping for:
                                  self_harm, dangerous_information, illegal_activity
   * task=koala_moderation -> Koala-supported labels only: toxicity, hate,
                              harassment, sexual, violence, self_harm
+  * task=koala_merged_moderation -> harmful_content, sexual
 
 The default system uses the pretrained models; this harness exists for teams that
 want to adapt a model to their own validation data.
@@ -47,6 +48,10 @@ TASK_LABELS: dict[str, list[str]] = {
         C.SEXUAL,
         C.VIOLENCE,
         C.SELF_HARM,
+    ],
+    "koala_merged_moderation": [
+        "harmful_content",
+        C.SEXUAL,
     ],
 }
 
@@ -168,6 +173,7 @@ def finetune(
     max_device_batch: int = 32,
     init_weights_path: str | None = None,
     metric_for_best_model: str = "macro_pr_auc",
+    tokenizer_name: str | None = None,
 ) -> dict[str, Any]:
     import os as _os
     # Reduce CUDA fragmentation OOMs (the allocator can reuse freed blocks).
@@ -198,7 +204,8 @@ def finetune(
         compute_class_weights(train_rows, label_list), dtype=torch.float
     )
 
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    tokenizer_source = tokenizer_name or model_name
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_source)
     model = AutoModelForSequenceClassification.from_pretrained(
         model_name,
         num_labels=len(label_list),
@@ -216,6 +223,12 @@ def finetune(
         from safetensors.torch import load_file as _load_safetensors
 
         state = _load_safetensors(init_weights_path)
+        current = model.state_dict()
+        state = {
+            key: val
+            for key, val in state.items()
+            if key in current and tuple(current[key].shape) == tuple(val.shape)
+        }
         missing, unexpected = model.load_state_dict(state, strict=False)
         print(f"[finetune] warm-started from {init_weights_path} "
               f"(missing={len(missing)} unexpected={len(unexpected)} keys)")
