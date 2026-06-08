@@ -436,12 +436,37 @@ def _model_source(root: Path, explicit: str | None) -> str:
     return load_models_config()["transformers"]["moderation_primary"]["hf_name"]
 
 
-def _init_weights_source(root: Path, explicit: str | None, model_name: str) -> str | None:
+def _valid_safetensors(path: Path) -> bool:
+    try:
+        from safetensors import safe_open
+
+        with safe_open(str(path), framework="pt", device="cpu") as fh:
+            list(fh.keys())
+        return True
+    except Exception as exc:  # noqa: BLE001 - report and train from base if auto-detected
+        print(f"[finetune] ignoring invalid warm-start weights {path}: {exc}")
+        return False
+
+
+def _init_weights_source(
+    root: Path,
+    explicit: str | None,
+    model_name: str,
+    *,
+    no_init_weights: bool = False,
+) -> str | None:
+    if no_init_weights:
+        return None
     if explicit:
         path = Path(explicit)
-        return str(path if path.is_absolute() else root / path)
+        resolved = path if path.is_absolute() else root / path
+        return str(resolved) if _valid_safetensors(resolved) else None
     warm_weights = root / DEFAULT_WARM_START / "model.safetensors"
-    if warm_weights.exists() and model_name != str(root / DEFAULT_WARM_START):
+    if (
+        warm_weights.exists()
+        and model_name != str(root / DEFAULT_WARM_START)
+        and _valid_safetensors(warm_weights)
+    ):
         return str(warm_weights)
     return None
 
@@ -454,6 +479,8 @@ def main() -> None:
                         help="Tokenizer source. Defaults to KoalaAI/Text-Moderation for local warm starts.")
     parser.add_argument("--init-weights", default=None,
                         help="Optional .safetensors weights to warm-start from. Defaults to rw500/model.safetensors when rw500 is weights-only.")
+    parser.add_argument("--no-init-weights", action="store_true",
+                        help="Do not warm-start from rw500/model.safetensors, even if it exists.")
     parser.add_argument("--processed-dir", default="data/processed")
     parser.add_argument("--data-dir", default="data/koala_merged_moderation")
     parser.add_argument("--output", default="models/finetuned/koala_merged_moderation")
@@ -479,7 +506,12 @@ def main() -> None:
     data_dir = root / args.data_dir
     output_dir = root / args.output
     model_name = _model_source(root, args.model)
-    init_weights = _init_weights_source(root, args.init_weights, model_name)
+    init_weights = _init_weights_source(
+        root,
+        args.init_weights,
+        model_name,
+        no_init_weights=args.no_init_weights,
+    )
     tokenizer_name = args.tokenizer or load_models_config()["transformers"]["moderation_primary"]["hf_name"]
 
     build_summary = None

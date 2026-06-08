@@ -61,13 +61,48 @@ def test_weights_only_rw500_uses_base_model_and_init_weights(tmp_path):
     mod = _load_script()
     warm = tmp_path / "models" / "fine" / "moderation" / "rw500"
     warm.mkdir(parents=True)
-    (warm / "model.safetensors").write_text("placeholder", encoding="utf-8")
+    from safetensors.torch import save_file
+
+    save_file({}, str(warm / "model.safetensors"))
 
     model = mod._model_source(tmp_path, explicit=None)
     init_weights = mod._init_weights_source(tmp_path, explicit=None, model_name=model)
 
     assert model == "KoalaAI/Text-Moderation"
     assert init_weights == str(warm / "model.safetensors")
+
+
+def test_invalid_weights_only_rw500_is_ignored(tmp_path):
+    mod = _load_script()
+    warm = tmp_path / "models" / "fine" / "moderation" / "rw500"
+    warm.mkdir(parents=True)
+    (warm / "model.safetensors").write_text("placeholder", encoding="utf-8")
+
+    model = mod._model_source(tmp_path, explicit=None)
+    init_weights = mod._init_weights_source(tmp_path, explicit=None, model_name=model)
+
+    assert model == "KoalaAI/Text-Moderation"
+    assert init_weights is None
+
+
+def test_no_init_weights_disables_auto_rw500(tmp_path):
+    mod = _load_script()
+    warm = tmp_path / "models" / "fine" / "moderation" / "rw500"
+    warm.mkdir(parents=True)
+    from safetensors.torch import save_file
+
+    save_file({}, str(warm / "model.safetensors"))
+
+    model = mod._model_source(tmp_path, explicit=None)
+    init_weights = mod._init_weights_source(
+        tmp_path,
+        explicit=None,
+        model_name=model,
+        no_init_weights=True,
+    )
+
+    assert model == "KoalaAI/Text-Moderation"
+    assert init_weights is None
 
 
 def test_full_rw500_dir_uses_directory_without_extra_init_weights(tmp_path):
