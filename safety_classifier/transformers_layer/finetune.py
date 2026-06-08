@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -160,6 +161,71 @@ def _checkpoint_is_compatible(checkpoint: str | Path, label_list: list[str]) -> 
     return True
 
 
+def _checkpoint_step(path: Path) -> int:
+    try:
+        return int(path.name.rsplit("-", 1)[1])
+    except (IndexError, ValueError):
+        return -1
+
+
+def _copy_tree_atomic(src: Path, dst: Path) -> None:
+    tmp = dst.with_name(f".{dst.name}.tmp")
+    if tmp.exists():
+        shutil.rmtree(tmp)
+    shutil.copytree(src, tmp)
+    if dst.exists():
+        shutil.rmtree(dst)
+    tmp.rename(dst)
+
+
+def _copy_final_model_to_backup(output_dir: str | Path, backup_dir: str | Path) -> None:
+    output = Path(output_dir)
+    backup = Path(backup_dir)
+    final_dst = backup / "final_model"
+    tmp = backup / ".final_model.tmp"
+    if tmp.exists():
+        shutil.rmtree(tmp)
+    tmp.mkdir(parents=True, exist_ok=True)
+    for item in output.iterdir():
+        if item.is_dir() and item.name.startswith("checkpoint-"):
+            continue
+        dst = tmp / item.name
+        if item.is_dir():
+            shutil.copytree(item, dst)
+        else:
+            shutil.copy2(item, dst)
+    if final_dst.exists():
+        shutil.rmtree(final_dst)
+    tmp.rename(final_dst)
+
+
+def _copy_checkpoint_to_backup(
+    checkpoint_dir: str | Path,
+    backup_dir: str | Path,
+    *,
+    backup_limit: int = 0,
+) -> Path:
+    checkpoint = Path(checkpoint_dir)
+    backup = Path(backup_dir)
+    backup.mkdir(parents=True, exist_ok=True)
+    dst = backup / checkpoint.name
+    _copy_tree_atomic(checkpoint, dst)
+    _prune_checkpoint_backups(backup, backup_limit)
+    return dst
+
+
+def _prune_checkpoint_backups(backup_dir: str | Path, backup_limit: int) -> None:
+    if backup_limit <= 0:
+        return
+    backup = Path(backup_dir)
+    checkpoints = sorted(
+        [p for p in backup.glob("checkpoint-*") if p.is_dir()],
+        key=_checkpoint_step,
+    )
+    while len(checkpoints) > backup_limit:
+        shutil.rmtree(checkpoints.pop(0))
+
+
 def finetune(
     model_name: str,
     task: str,
@@ -174,6 +240,8 @@ def finetune(
     init_weights_path: str | None = None,
     metric_for_best_model: str = "macro_pr_auc",
     tokenizer_name: str | None = None,
+    checkpoint_backup_dir: str | None = None,
+    checkpoint_backup_limit: int = 0,
 ) -> dict[str, Any]:
     import os as _os
     # Reduce CUDA fragmentation OOMs (the allocator can reuse freed blocks).
@@ -187,6 +255,7 @@ def finetune(
         AutoTokenizer,
         EarlyStoppingCallback,
         Trainer,
+        TrainerCallback,
         TrainingArguments,
     )
 
@@ -284,6 +353,21 @@ def finetune(
             loss = loss_fct(outputs.logits, labels.float())
             return (loss, outputs) if return_outputs else loss
 
+    class CheckpointBackupCallback(TrainerCallback):
+        def on_save(self, args, state, control, **kwargs):  # noqa: ANN001
+            if not checkpoint_backup_dir:
+                return control
+            checkpoint = Path(args.output_dir) / f"checkpoint-{state.global_step}"
+            if not checkpoint.exists():
+                return control
+            copied = _copy_checkpoint_to_backup(
+                checkpoint,
+                checkpoint_backup_dir,
+                backup_limit=checkpoint_backup_limit,
+            )
+            print(f"[finetune] backed up checkpoint to {copied}")
+            return control
+
     use_cuda = torch.cuda.is_available()
     # Cap the per-device batch so memory-heavy models (DeBERTa-v3) fit on a T4,
     # and use gradient accumulation to preserve the requested *effective* batch.
@@ -323,13 +407,17 @@ def finetune(
         report_to=[],
     )
 
+    callbacks = [EarlyStoppingCallback(early_stopping_patience=2)]
+    if checkpoint_backup_dir:
+        callbacks.append(CheckpointBackupCallback())
+
     trainer = WeightedTrainer(
         model=model,
         args=args,
         train_dataset=train_ds,
         eval_dataset=val_ds,
         compute_metrics=compute_metrics,
-        callbacks=[EarlyStoppingCallback(early_stopping_patience=2)],
+        callbacks=callbacks,
     )
 
     # Auto-resume: if a checkpoint already exists in output_dir (from an
@@ -361,6 +449,9 @@ def finetune(
     metrics = trainer.evaluate()
     trainer.save_model(output_dir)
     tokenizer.save_pretrained(output_dir)
+    if checkpoint_backup_dir:
+        _copy_final_model_to_backup(output_dir, checkpoint_backup_dir)
+        print(f"[finetune] backed up final model to {Path(checkpoint_backup_dir) / 'final_model'}")
     Path(output_dir, "finetune_metrics.json").write_text(
         json.dumps(metrics, indent=2), encoding="utf-8"
     )
@@ -377,10 +468,14 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--lr", type=float, default=2e-5)
+    parser.add_argument("--checkpoint-backup-dir", default=None)
+    parser.add_argument("--checkpoint-backup-limit", type=int, default=0)
     args = parser.parse_args()
     metrics = finetune(
         args.model, args.task, args.train, args.val, args.output,
         epochs=args.epochs, batch_size=args.batch_size, lr=args.lr,
+        checkpoint_backup_dir=args.checkpoint_backup_dir,
+        checkpoint_backup_limit=args.checkpoint_backup_limit,
     )
     print(json.dumps(metrics, indent=2))
 

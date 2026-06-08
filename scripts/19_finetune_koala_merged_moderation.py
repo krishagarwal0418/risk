@@ -499,6 +499,10 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=1e-5)
     parser.add_argument("--val-limit", type=int, default=10000)
+    parser.add_argument("--checkpoint-backup-dir", default=None,
+                        help="Optional Drive/local dir where every checkpoint-* and final_model are copied.")
+    parser.add_argument("--checkpoint-backup-limit", type=int, default=0,
+                        help="Keep only this many checkpoint backups. 0 keeps all.")
     parser.add_argument("--seed", type=int, default=13)
     args = parser.parse_args()
 
@@ -547,6 +551,8 @@ def main() -> None:
         val_limit=args.val_limit,
         metric_for_best_model="macro_pr_auc",
         init_weights_path=init_weights,
+        checkpoint_backup_dir=args.checkpoint_backup_dir,
+        checkpoint_backup_limit=args.checkpoint_backup_limit,
     )
     eval_results = evaluate(output_dir, data_dir, args.batch_size)
     rows = [
@@ -569,6 +575,8 @@ def main() -> None:
             "tokenizer": tokenizer_name,
             "init_weights": init_weights,
             "output": str(output_dir),
+            "checkpoint_backup_dir": args.checkpoint_backup_dir,
+            "checkpoint_backup_limit": args.checkpoint_backup_limit,
             "data_dir": str(data_dir),
             "build": build_summary,
             "train_metrics": metrics,
