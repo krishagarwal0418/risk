@@ -57,6 +57,33 @@ def test_clean_record_safe_is_empty_label_vector():
     assert row["labels"] == []
 
 
+def test_weights_only_rw500_uses_base_model_and_init_weights(tmp_path):
+    mod = _load_script()
+    warm = tmp_path / "models" / "fine" / "moderation" / "rw500"
+    warm.mkdir(parents=True)
+    (warm / "model.safetensors").write_text("placeholder", encoding="utf-8")
+
+    model = mod._model_source(tmp_path, explicit=None)
+    init_weights = mod._init_weights_source(tmp_path, explicit=None, model_name=model)
+
+    assert model == "KoalaAI/Text-Moderation"
+    assert init_weights == str(warm / "model.safetensors")
+
+
+def test_full_rw500_dir_uses_directory_without_extra_init_weights(tmp_path):
+    mod = _load_script()
+    warm = tmp_path / "models" / "fine" / "moderation" / "rw500"
+    warm.mkdir(parents=True)
+    (warm / "config.json").write_text("{}", encoding="utf-8")
+    (warm / "model.safetensors").write_text("placeholder", encoding="utf-8")
+
+    model = mod._model_source(tmp_path, explicit=None)
+    init_weights = mod._init_weights_source(tmp_path, explicit=None, model_name=model)
+
+    assert model == str(warm)
+    assert init_weights is None
+
+
 def test_build_merged_data_filters_unsupported_and_balances(tmp_path):
     mod = _load_script()
     processed = tmp_path / "processed"

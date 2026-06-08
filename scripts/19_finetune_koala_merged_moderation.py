@@ -431,9 +431,19 @@ def _model_source(root: Path, explicit: str | None) -> str:
     if explicit:
         return str(root / explicit) if not Path(explicit).is_absolute() else explicit
     warm = root / DEFAULT_WARM_START
-    if warm.exists():
+    if (warm / "config.json").exists():
         return str(warm)
     return load_models_config()["transformers"]["moderation_primary"]["hf_name"]
+
+
+def _init_weights_source(root: Path, explicit: str | None, model_name: str) -> str | None:
+    if explicit:
+        path = Path(explicit)
+        return str(path if path.is_absolute() else root / path)
+    warm_weights = root / DEFAULT_WARM_START / "model.safetensors"
+    if warm_weights.exists() and model_name != str(root / DEFAULT_WARM_START):
+        return str(warm_weights)
+    return None
 
 
 def main() -> None:
@@ -442,6 +452,8 @@ def main() -> None:
                         help="Starting model dir/id. Defaults to models/fine/moderation/rw500 if present, else KoalaAI/Text-Moderation")
     parser.add_argument("--tokenizer", default=None,
                         help="Tokenizer source. Defaults to KoalaAI/Text-Moderation for local warm starts.")
+    parser.add_argument("--init-weights", default=None,
+                        help="Optional .safetensors weights to warm-start from. Defaults to rw500/model.safetensors when rw500 is weights-only.")
     parser.add_argument("--processed-dir", default="data/processed")
     parser.add_argument("--data-dir", default="data/koala_merged_moderation")
     parser.add_argument("--output", default="models/finetuned/koala_merged_moderation")
@@ -467,6 +479,7 @@ def main() -> None:
     data_dir = root / args.data_dir
     output_dir = root / args.output
     model_name = _model_source(root, args.model)
+    init_weights = _init_weights_source(root, args.init_weights, model_name)
     tokenizer_name = args.tokenizer or load_models_config()["transformers"]["moderation_primary"]["hf_name"]
 
     build_summary = None
@@ -501,6 +514,7 @@ def main() -> None:
         lr=args.lr,
         val_limit=args.val_limit,
         metric_for_best_model="macro_pr_auc",
+        init_weights_path=init_weights,
     )
     eval_results = evaluate(output_dir, data_dir, args.batch_size)
     rows = [
@@ -521,6 +535,7 @@ def main() -> None:
         summary={
             "model": model_name,
             "tokenizer": tokenizer_name,
+            "init_weights": init_weights,
             "output": str(output_dir),
             "data_dir": str(data_dir),
             "build": build_summary,
