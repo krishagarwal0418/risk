@@ -37,9 +37,12 @@ class FastTextHyperParams:
     lr: float = 0.5
     minn: int = 2
     maxn: int = 5
+    bucket: int = 2_000_000
+    thread: int | None = None
+    verbose: int = 2
 
     def to_train_kwargs(self) -> dict[str, Any]:
-        return {
+        out = {
             "loss": self.loss,
             "wordNgrams": self.wordNgrams,
             "dim": self.dim,
@@ -47,7 +50,12 @@ class FastTextHyperParams:
             "lr": self.lr,
             "minn": self.minn,
             "maxn": self.maxn,
+            "bucket": self.bucket,
+            "verbose": self.verbose,
         }
+        if self.thread:
+            out["thread"] = self.thread
+        return out
 
 
 def _label_counts(train_file: Path) -> dict[str, int]:
@@ -95,6 +103,12 @@ def train_head(
 
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
     started = time.time()
+    print(
+        f"[fasttext] {head}: train={train_file} labels={_label_counts(train_file)}",
+        flush=True,
+    )
+    print(f"[fasttext] {head}: params={params.to_train_kwargs()}", flush=True)
+    print(f"[fasttext] {head}: training .bin ...", flush=True)
     model = fasttext.train_supervised(input=str(train_file), **params.to_train_kwargs())
 
     bin_path = MODELS_DIR / f"{head}_head.bin"
@@ -103,12 +117,14 @@ def train_head(
     bin_size = bin_path.stat().st_size if bin_path.exists() else 0
 
     # Quantize to .ftz.
+    print(f"[fasttext] {head}: quantizing .ftz cutoff={cutoff:,} ...", flush=True)
     model.quantize(input=str(train_file), qnorm=True, retrain=True, cutoff=cutoff)
     model.save_model(str(ftz_path))
     ftz_size = ftz_path.stat().st_size if ftz_path.exists() else 0
 
     # Validation metric (fastText built-in test).
     metrics: dict[str, Any] = {}
+    print(f"[fasttext] {head}: evaluating ...", flush=True)
     if val_file.exists():
         n, p, r = model.test(str(val_file))
         metrics["val"] = {"samples": n, "precision_at_1": p, "recall_at_1": r}

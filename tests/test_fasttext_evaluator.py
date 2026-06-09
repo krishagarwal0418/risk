@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from safety_classifier.fasttext_layer.evaluator import _read_test, evaluate_model
+from safety_classifier.fasttext_layer.evaluator import _parse_line, _read_test, evaluate_model
 
 
 class _MultiLabelModel:
@@ -33,6 +33,13 @@ def test_read_test_groups_duplicate_multilabel_rows(tmp_path: Path):
 
     assert examples[0] == ({"hate", "toxicity"}, "same text")
     assert examples[1] == ({"safe"}, "other text")
+
+
+def test_parse_line_reads_native_multilabel_prefixes():
+    labels, text = _parse_line("__label__hate __label__toxicity same text")
+
+    assert labels == {"hate", "toxicity"}
+    assert text == "same text"
 
 
 def test_evaluate_model_accepts_any_true_label_for_top1(tmp_path: Path):

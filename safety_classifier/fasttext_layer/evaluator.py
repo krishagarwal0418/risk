@@ -33,12 +33,19 @@ def _load_model(path: str):
     return fasttext.load_model(path)
 
 
-def _parse_line(line: str) -> tuple[str, str]:
-    """Return (label, text) for a single FastText line (first label only)."""
-    parts = line.split(" ", 1)
-    label = parts[0][len("__label__"):] if parts[0].startswith("__label__") else "unknown"
-    text = parts[1] if len(parts) > 1 else ""
-    return label, text
+def _parse_line(line: str) -> tuple[set[str], str]:
+    """Return (labels, text) for a native FastText multi-label line."""
+    labels: set[str] = set()
+    parts = line.split()
+    text_start = 0
+    for idx, part in enumerate(parts):
+        if not part.startswith("__label__"):
+            text_start = idx
+            break
+        labels.add(part[len("__label__"):])
+    else:
+        text_start = len(parts)
+    return labels or {"unknown"}, " ".join(parts[text_start:])
 
 
 def _read_test(test_file: Path) -> list[tuple[set[str], str]]:
@@ -55,11 +62,11 @@ def _read_test(test_file: Path) -> list[tuple[set[str], str]]:
         line = line.strip()
         if not line:
             continue
-        label, text = _parse_line(line)
+        labels, text = _parse_line(line)
         if text not in grouped:
             grouped[text] = set()
             order.append(text)
-        grouped[text].add(label)
+        grouped[text].update(labels)
     return [(grouped[text], text) for text in order]
 
 
